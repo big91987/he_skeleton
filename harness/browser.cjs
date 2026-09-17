@@ -49,7 +49,7 @@ async function main() {
           case 'visible': await locator.waitFor({state:'visible'}); break;
           case 'absent': await locator.waitFor({state:'hidden'}); break;
           case 'reload': await page.reload(); break;
-          default: throw new Error('Unsupported test action');
+          default: throw new Error('Unsupported test action: expected a flat array of steps, each with action fill/click/visible/absent/reload; no name/steps wrapper');
         }
         performed.push(step);
       }

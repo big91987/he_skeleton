@@ -28,6 +28,7 @@ def run_agent(workspace, prompt, evidence, timeout=480):
                     "http_proxy", "https_proxy", "all_proxy", "no_proxy"}}
     command = ["codex", "exec", "--ignore-user-config", "--ephemeral",
                "--sandbox", "workspace-write", "-c", 'approval_policy="never"',
+               "-c", "features.skip_host_skill_discovery=true",
                "-c", 'model_provider="harness_http"',
                "-c", 'model_providers.harness_http={name="OpenAI HTTPS",wire_api="responses",requires_openai_auth=true,supports_websockets=false}',
                "--skip-git-repo-check", "--json", "--output-schema", str(schema),

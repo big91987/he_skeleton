@@ -190,6 +190,7 @@ def main():
             return
         state['round'] += 1
         state['status'] = 'running'
+        state['run_id'] = os.environ['GITHUB_RUN_ID']
         state['history'].append({'user':instruction, 'event':event_id})
         state['source_sha'] = source_sha
         atomic(state_path, state)
@@ -202,8 +203,10 @@ def main():
                 'No backend, no external network/CDNs. HTML/CSS/JS only; use localStorage for demo persistence. '
                 'Complete basic user journeys, not isolated buttons. Keep existing accepted behavior when revising. '
                 'If the user explicitly asks to clarify/inspect first or a key product choice blocks work, return needs_input with a concrete question and stop. '
+                'Follow the latest user feedback: if an earlier request to ask first has already been answered in history, continue implementation instead of asking again. '
                 'Otherwise implement and return ready. Never claim tests ran; the harness will test separately. '
                 'Also create app/acceptance.json: an array of browser steps proving the requested main user journey. '
+                'The array is flat: [{"action":"fill","label":"任务","value":"测试任务"},{"action":"click","role":"button","name":"新增"}]. No name/steps wrapper. '
                 'Each step has action fill/click/visible/absent/reload. Locate using label, or role+name, or exact text; fill has value. '
                 'Use accessible labels. This plan is implementation-authored evidence, not independent acceptance.\n'
                 + 'Original task:\n' + issue['title'] + '\n' + (issue['body'] or '')

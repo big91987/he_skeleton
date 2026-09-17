@@ -68,4 +68,37 @@ class TrustAndRecovery(unittest.TestCase):
         self.assertFalse(calls[-1][2]['force'])
 
 
+class EventDelivery(unittest.TestCase):
+    def test_redelivered_completed_event_does_not_call_agent_or_github(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            event={'repository':{'owner':{'login':'owner'},'full_name':'owner/repo'},
+                   'sender':{'login':'owner'},'comment':{'body':'/harness 继续','id':42},'issue':{'number':7}}
+            event_file=root/'event.json';event_file.write_text(json.dumps(event))
+            session=root/'sessions/7';session.mkdir(parents=True)
+            loop.atomic(session/'state.json',{'processed':['comment-42'],'history':[],'round':1})
+            env={'GITHUB_EVENT_PATH':str(event_file),'GITHUB_EVENT_NAME':'issue_comment',
+                 'GITHUB_REPOSITORY':'owner/repo','GITHUB_RUN_ID':'100','HARNESS_ROOT':str(root),'RUNNER_TEMP':str(root/'tmp')}
+            with patch.dict(os.environ,env), patch.object(loop,'gh') as api, patch.object(loop,'run_agent') as agent:
+                loop.main()
+                api.assert_not_called();agent.assert_not_called()
+
+    def test_fork_pr_is_rejected_before_workspace_import_or_agent(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            event={'repository':{'owner':{'login':'owner'},'full_name':'owner/repo'},
+                   'sender':{'login':'owner'},'comment':{'body':'/harness 检查','id':43},'issue':{'number':8}}
+            p=root/'event.json';p.write_text(json.dumps(event))
+            env={'GITHUB_EVENT_PATH':str(p),'GITHUB_EVENT_NAME':'issue_comment',
+                 'GITHUB_REPOSITORY':'owner/repo','GITHUB_RUN_ID':'101','HARNESS_ROOT':str(root),'RUNNER_TEMP':str(root/'tmp')}
+            def api(method,path,body=None):
+                if '/issues/' in path:return {'state':'open','pull_request':{}}
+                if '/git/ref/' in path:return {'object':{'sha':'abc'}}
+                if '/pulls/' in path:return {'head':{'repo':{'full_name':'stranger/repo'}}}
+                return {'default_branch':'main'}
+            with patch.dict(os.environ,env), patch.object(loop,'gh',side_effect=api), patch.object(loop,'run_agent') as agent:
+                with self.assertRaises(PermissionError):loop.main()
+                agent.assert_not_called()
+                self.assertFalse((root/'sessions/8/workspace').exists())
+
 if __name__=='__main__':unittest.main()
