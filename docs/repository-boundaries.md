@@ -27,3 +27,15 @@ python3 scripts/bootstrap_project.py <owner>/<product> --directory <product-chec
 当前入口面向 macOS ARM64、本机已登录 gh/Codex、公开实验项目的 main 分支。它准备受管理文件、提交推送、配置任务标签和 Pages、安装校验过的 Runner、浏览器依赖并注册启动服务。没有 `--activate` 时只准备文件。不会修改已有 app/。
 
 一键接入不等于业务验收通过；仍须在该产品仓库完成实际 Issue→反馈→预览验证。目前应用执行器仍以静态网页验证为范围，后端项目配置尚待扩展。
+
+## 自动拉取上游并提出升级
+
+在脚手架目录执行，无需手动更新本地上游 checkout：
+
+```sh
+python3 scripts/update_project.py <owner>/<product> --publish-pr
+```
+
+默认读取 GitHub 上游 main 最新提交，用临时快照运行上游测试、校验托管文件及 Python/JavaScript 语法，然后创建仅含托管文件的升级 PR。省略 `--publish-pr` 只做检查。可用 `--ref <branch-or-sha>` 验证尚未合并的脚手架修复。
+
+要求 gh 已登录且有目标仓库写权限、本机安装 Python、Git 和 Node。业务 app 不覆盖；托管文件相对 manifest 有修改时停止。同一源版本和业务基线已有开放升级 PR 时复用链接。默认分支不直接修改；PR 合并后，再在业务 Issue 继续运行，真实预览部署与业务验收另行验证。脚本按需运行，不安装定时任务。
