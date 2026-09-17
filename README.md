@@ -1,38 +1,67 @@
-# Harness Engineering experiment
+# Harness Engineering 实验
 
-Use GitHub Issues/PRs as the user interface and a local self-hosted Runner as the execution host.
+用 GitHub Issue／PR 交任务，本机 Codex 干活，浏览器检查后发布可点击的网页预览。第一版只支持无构建步骤的 HTML/CSS/JS 静态应用；可以用 localStorage，不能冒充真实后端、登录系统或 GPU 验收。
 
-## Current state
+## 怎么试
 
-- Repository initialized with an owner-only, manually triggered connectivity workflow.
-- No Issue/PR event currently starts local execution.
-- Runner registered as `he-skeleton-local`; the user-level macOS service is active. Connectivity test passed: [run 35201703061](https://github.com/big91987/he_skeleton/actions/runs/35201703061).
-- Agent execution, persisted sessions, human feedback resumption, screenshots and preview deployment are not connected yet.
+1. 仓库所有者打开 **Issues → New issue → 交给 Agent 做一个网页**，描述需求。带 `harness` 标签的新 Issue 自动开始。
+2. 也可以在已有 Issue 或同仓库 PR 评论 `/harness 你的要求`。普通聊天不触发执行。
+3. Agent 如果需要澄清，会在原页面问你，然后结束 Job。回复 `/harness 你的回答`，它会恢复原工作区继续。
+4. 执行结束后，原页面会出现检查结果、任务分支、预览链接和截图。点预览直接体验。
+5. 有意见继续回复 `/harness 修改意见`。每轮预览有独立地址，旧版本不会被覆盖。
+6. 点击“查看改动／创建 PR”进入 GitHub 审查；不自动批准或合并。
 
-## Directory layout
+先一次只提交一个命令，等结果回来再回复。初期流水线全局串行；GitHub concurrency 不是完整 FIFO 队列，短时间连续提交多个待执行命令可能替换 pending run。被取消的命令可以在前一轮完成后重发。
+
+**示例：** 做一个团队待办板，支持创建、完成、筛选、删除，刷新后保留。先问我一个需要确定的问题，等我回答再实现。
+
+## 入口和执行边界
+
+- 只有仓库所有者能启动／重新运行本地任务；外部评论不会运行本机代码。
+- 工作流固定从默认分支读取 Harness 程序，不执行 PR 自带的工作流或安装脚本。
+- PR 接入只导入 `app/` 中的静态文件；不支持 fork PR。
+- 实现只发布 `app/` 文件。外部修改任务分支时拒绝覆盖，需要重新对齐工作区。
+- 每轮最多 3 次实现／浏览器检查；每次 Agent 调用限时 8 分钟，整个工作 Job 限时 30 分钟。
+- `/harness stop` 停止后续推进。中断正在执行的任务请到 Actions 点击 **Cancel workflow**；停止评论不会抢占当前 Job。
+- 自动浏览器路径来自实现方的 `acceptance.json`，不是独立产品验收；截图也不能证明所有功能正确。
+
+## 状态保存在哪
 
 ```text
 <work-root>/
-  he_skeleton/              # source repository
+  he_skeleton/                  # Harness 源码
   he_skeleton_runner/
-    runtime/                # official runner application and private registration files
-    jobs/                   # disposable workflow workspaces, created on first execution
-    sessions/               # durable checkpoints, integration pending
-    previews/               # long-lived preview files, integration pending
+    runtime/                    # Runner 程序和私有注册信息
+    jobs/                       # 可丢弃的 Actions checkout
+    tools/                      # 固定版本 Playwright 和 Chromium
+    sessions/<issue-or-pr>/
+      state.json                # 任务状态、用户反馈、Agent 总结、已处理事件
+      workspace/app/            # 跨轮保留的代码
+      round-*/                  # 私有调用记录和验证证据
+    previews/task-*/round-*/     # 可长期打开的固定版本网页和截图
 ```
 
-Separate directories do not provide OS isolation. The initial host is a macOS ARM64 machine using its logged-in user's permissions. A dedicated OS account or VM is a later option if stronger isolation is needed.
+Session 独立于进程和 Job。第一版用持久化任务历史＋工作区启动新 Codex 调用，不依赖原生会话 ID，也不声称恢复模型内部状态。没有跨机器备份，删除 `sessions/` 会丢失本地检查点；请保留该目录。
 
-## First connectivity test
+## 工程实现
 
-Once the runner is approved, registered and online, open **Actions → Local runner connectivity → Run workflow**, select `main`. Only the repository owner can run this job. It checks tool availability without invoking a model, reading credentials, checking out contributed code or publishing application content.
+- `.github/workflows/harness.yml`：事件、权限、执行和 Pages 发布。
+- `harness/loop.py`：命令解析、检查点、有限修复循环、分支交付和公开结果。
+- `harness/agent.py`：Codex 适配；读取现有本机登录，使用 HTTPS，单次调用不加载用户工具配置。没有复制登录凭据到仓库。
+- `harness/browser.cjs`：固定 Playwright 执行器，只允许有限的声明式点击／输入／断言；不在宿主机执行 Agent 生成的测试脚本。浏览器禁止外部网络请求。
+- GitHub Pages：托管静态预览，Job 结束或本机休眠后已发布的网页仍可访问。预览公开，使用虚构实验数据。
 
-## Next milestones
+各轮预览和会话暂不自动清理，先保留证据；长时间使用需人工清理或增加保留策略。本地 Runner 是目录分离，不是 OS 沙箱；当前使用同一 macOS 账户，仅适合所有者受控实验。
 
-1. Verify GitHub-to-local execution.
-2. Add a tool-neutral execution input/result contract and the first real Agent adapter.
-3. Persist task context and execution checkpoints independently of job workspaces.
-4. Connect explicit owner commands on Issues/PRs to pause and resume.
-5. Publish a static preview and screenshots, then verify a real feedback round trip.
+## 运维与验证
 
-The first preview will only prove browser interaction for a static application; backend/GPU acceptance requires a suitable real environment.
+在 Runner 的 `runtime/` 目录执行 `./svc.sh status`、`./svc.sh stop` 或 `./svc.sh start`。Mac 需保持开机、联网，才能接新任务。
+
+```sh
+python3 -m unittest discover -s tests -v
+node --check harness/browser.cjs
+```
+
+依赖：Python 3、Node、已登录的 Codex CLI（本机验证版本 0.151.0）、Runner 2.337.0；`tools/` 安装 Playwright 1.58.2 和对应 Chromium。Pages 设置为 GitHub Actions 发布。不启用 Actions 审批 PR 的额外权限。
+
+Runner 连通验证：[实际通过的运行](https://github.com/big91987/he_skeleton/actions/runs/35201703061)。完整链路以实验 Issue 中的实际运行、预览和反馈记录为准。
