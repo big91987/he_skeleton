@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Copy a committed Harness revision to a lab without touching its application."""
+"""Copy a committed Harness revision to a product repository without touching its application."""
 import argparse
 import hashlib
 import json
@@ -12,7 +12,7 @@ MANAGED = ['harness/agent.py', 'harness/loop.py', 'harness/browser.cjs',
 
 def sync(source, destination, revision):
     if source.resolve() == destination.resolve():
-        raise ValueError('Source and experiment repositories must differ')
+        raise ValueError('Source and product repositories must differ')
     if not (destination / '.git').exists():
         raise ValueError('Destination must already be a Git checkout')
     sha = subprocess.check_output(['git','rev-parse','--verify',revision+'^{commit}'],cwd=source,text=True).strip()
@@ -34,7 +34,7 @@ def sync(source, destination, revision):
         path.write_bytes(data)
     manifest.write_text(json.dumps({'repository':'https://github.com/big91987/he_skeleton',
         'revision':sha,'files':{n:hashlib.sha256(b).hexdigest() for n,b in contents.items()}},indent=2)+'\n')
-    print('Synced Harness revision',sha,'to experiment checkout; app/ untouched.')
+    print('Synced Harness revision',sha,'to product checkout; app/ untouched.')
 
 
 if __name__=='__main__':
