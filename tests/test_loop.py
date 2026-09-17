@@ -112,4 +112,23 @@ class ClarificationGate(unittest.TestCase):
     def test_explicit_clarify_command_is_read_only(self):
         self.assertTrue(loop.clarification_only('issue_comment','','clarify 先看范围'))
 
+class PublishRecovery(unittest.TestCase):
+    def test_publish_restores_result_without_model_or_code_change(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);session=root/'sessions/7';session.mkdir(parents=True)
+            preview=root/'previews/task-7/round-2';preview.mkdir(parents=True)
+            (preview/'index.html').write_text('verified product')
+            loop.atomic(session/'state.json',{'processed':[],'history':[{'agent':{'summary':'done'}}],
+                'round':2,'preview':'task-7/round-2','pr_url':'https://example.test/pr','source_sha':'verified-sha'})
+            event={'repository':{'owner':{'login':'owner'},'full_name':'owner/repo'},
+                   'sender':{'login':'owner'},'comment':{'body':'/harness publish','id':44},'issue':{'number':7}}
+            p=root/'event.json';p.write_text(json.dumps(event))
+            env={'GITHUB_EVENT_PATH':str(p),'GITHUB_EVENT_NAME':'issue_comment','GITHUB_REPOSITORY':'owner/repo',
+                 'GITHUB_RUN_ID':'102','HARNESS_ROOT':str(root),'RUNNER_TEMP':str(root/'tmp'),'GITHUB_OUTPUT':str(root/'output')}
+            with patch.dict(os.environ,env),patch.object(loop,'gh') as api,patch.object(loop,'run_agent') as agent:
+                loop.main();agent.assert_not_called();api.assert_called_once()
+            self.assertEqual(json.loads((session/'state.json').read_text())['round'],2)
+            self.assertEqual(json.loads((root/'tmp/harness-output/result.json').read_text())['sha'],'verified-sha')
+            self.assertIn('publish=true',(root/'output').read_text())
+
 if __name__=='__main__':unittest.main()

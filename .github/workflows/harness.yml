@@ -56,11 +56,31 @@ jobs:
           name: task-result
           path: ${{ runner.temp }}/harness-output/result.json
           retention-days: 14
-      - name: Package all retained previews
+      - name: Package retained previews without platform tar dependencies
         if: steps.task.outputs.publish == 'true'
-        uses: actions/upload-pages-artifact@v3
+        env:
+          HARNESS_ROOT: ${{ runner.workspace }}/../..
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          python3 - <<'PYCODE'
+          import os, tarfile
+          from pathlib import Path
+          root = Path(os.environ['HARNESS_ROOT']).resolve() / 'previews'
+          with tarfile.open(Path(os.environ['RUNNER_TEMP']) / 'artifact.tar', 'w', format=tarfile.GNU_FORMAT) as archive:
+              for path in sorted(root.rglob('*')):
+                  if path.is_symlink():
+                      raise ValueError('Preview archive must not contain symlinks')
+                  if path.is_file():
+                      archive.add(path, arcname=path.relative_to(root).as_posix(), recursive=False)
+          PYCODE
+      - name: Upload Pages archive
+        if: steps.task.outputs.publish == 'true'
+        uses: actions/upload-artifact@v4
         with:
-          path: ${{ runner.workspace }}/../../previews
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          compression-level: 0
+          retention-days: 1
   publish:
     needs: work
     if: needs.work.outputs.publish == 'true'

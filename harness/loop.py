@@ -161,6 +161,20 @@ def main():
             atomic(state_path, state)
             comment('已停止后续推进，保留任务工作区和历史。正在执行的 Job 请在 Actions 点击 Cancel。')
             return
+        if instruction.strip().lower() in {'publish', '发布'}:
+            if not state.get('preview') or not (root/'previews'/state['preview']/'index.html').is_file():
+                raise ValueError('No saved preview to publish')
+            summary = next((entry['agent']['summary'] for entry in reversed(state['history']) if 'agent' in entry), '')
+            atomic(output/'result.json', {'task':task,'summary':summary,'preview':state['preview'],
+                                         'pr_url':state['pr_url'],'sha':state['source_sha'],'event_id':event_id})
+            state['status'] = 'preview_pending'
+            state['run_id'] = os.environ['GITHUB_RUN_ID']
+            state['processed'].append(event_id)
+            atomic(state_path, state)
+            with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                f.write('publish=true\ntask='+str(task)+'\n')
+            comment('仅重新发布已保存并检查过的预览，不调用 Agent、不修改业务代码。')
+            return
         issue = gh('GET', f'{prefix}/issues/{task}')
         if issue['state'] == 'closed':
             comment('任务已关闭；请先重新打开，再继续。')
