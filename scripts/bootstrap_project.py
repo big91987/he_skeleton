@@ -113,6 +113,7 @@ def main():
 
 if __name__=='__main__':
     try:main()
-    except subprocess.CalledProcessError as error:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         # Registration command arguments contain a short-lived token; never print them.
-        raise SystemExit('External setup command failed (exit '+str(error.returncode)+'). Provisioning is incomplete.') from None
+        status = 'timeout' if isinstance(error, subprocess.TimeoutExpired) else 'exit '+str(error.returncode)
+        raise SystemExit('External setup command failed ('+status+'). Provisioning is incomplete.') from None
