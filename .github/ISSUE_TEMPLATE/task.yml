@@ -6,6 +6,15 @@ body:
   - type: markdown
     attributes:
       value: '当前仅仓库所有者可以触发本地执行。第一版支持 HTML/CSS/JS 静态网页和浏览器本地存储，不支持真实后端或账号系统。'
+  - type: dropdown
+    id: start
+    attributes:
+      label: 开始方式
+      options:
+        - 先澄清（本轮不改代码）
+        - 直接实施
+    validations:
+      required: true
   - type: textarea
     id: request
     attributes:

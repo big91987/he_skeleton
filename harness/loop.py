@@ -56,6 +56,13 @@ def command(event, event_name):
     return event['issue']['number'], match[1] or '继续', 'comment-' + str(comment['id'])
 
 
+def clarification_only(event_name, body, instruction):
+    explicit = instruction.strip().split(maxsplit=1)[0] if instruction.strip() else ''
+    if explicit in {'clarify', '澄清'}:
+        return True
+    return event_name == 'issues' and not re.search(r'### 开始方式\s+直接实施', body or '')
+
+
 def app_files(root):
     files = {}
     for p in root.rglob('*'):
@@ -211,9 +218,17 @@ def main():
                 'Use accessible labels. This plan is implementation-authored evidence, not independent acceptance.\n'
                 + 'Original task:\n' + issue['title'] + '\n' + (issue['body'] or '')
                 + '\nDurable history:\n' + json.dumps(state['history'], ensure_ascii=False))
+            read_only = clarification_only(os.environ['GITHUB_EVENT_NAME'], issue['body'], instruction)
+            if read_only:
+                prompt += ('\nCURRENT STAGE: CLARIFICATION ONLY. You must not implement or edit files. '
+                           'Return needs_input and the specific question the user requested, or a concise scope confirmation. '
+                           'This is a read-only stage enforced by the host. Do not treat the generic start instruction as a user answer.')
+            original_app = app_files(app) if read_only else None
             result = None
             for attempt in range(3):
-                result = run_agent(workspace, prompt, evidence / f'agent-{attempt + 1}')
+                result = run_agent(workspace, prompt, evidence / f'agent-{attempt + 1}', read_only=read_only)
+                if read_only and app_files(app) != original_app:
+                    raise RuntimeError('Read-only clarification modified app files')
                 if result['status'] == 'needs_input':
                     break
                 app_files(app)

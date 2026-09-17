@@ -101,4 +101,15 @@ class EventDelivery(unittest.TestCase):
                 agent.assert_not_called()
                 self.assertFalse((root/'sessions/8/workspace').exists())
 
+class ClarificationGate(unittest.TestCase):
+    def test_new_issue_defaults_to_read_only(self):
+        self.assertTrue(loop.clarification_only('issues','先问我','开始处理上述需求。'))
+
+    def test_explicit_direct_entry_and_answer_can_implement(self):
+        self.assertFalse(loop.clarification_only('issues','### 开始方式\n\n直接实施','开始处理上述需求。'))
+        self.assertFalse(loop.clarification_only('issue_comment','先问我','保留，继续实现'))
+
+    def test_explicit_clarify_command_is_read_only(self):
+        self.assertTrue(loop.clarification_only('issue_comment','','clarify 先看范围'))
+
 if __name__=='__main__':unittest.main()
