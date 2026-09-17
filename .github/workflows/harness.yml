@@ -1,0 +1,148 @@
+name: Harness task
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'Existing Issue or same-repository PR number'
+        required: true
+        type: string
+      instruction:
+        description: 'Instruction / response to clarification'
+        required: true
+        default: '继续检查'
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: harness-preview-${{ github.actor == github.repository_owner && 'owner' || github.run_id }}
+  cancel-in-progress: false
+jobs:
+  work:
+    if: >-
+      github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'harness')) ||
+       (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/harness')))
+    runs-on: [self-hosted, macOS, ARM64, he-skeleton]
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: read
+    outputs:
+      publish: ${{ steps.task.outputs.publish }}
+      task: ${{ steps.task.outputs.task }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Execute persistent task
+        id: task
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HARNESS_ROOT: ${{ runner.workspace }}/../..
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          python3 harness/loop.py
+      - name: Upload public task result
+        if: steps.task.outputs.publish == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-result
+          path: ${{ runner.temp }}/harness-output/result.json
+          retention-days: 14
+      - name: Package all retained previews
+        if: steps.task.outputs.publish == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ runner.workspace }}/../../previews
+  publish:
+    needs: work
+    if: needs.work.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+      issues: write
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: task-result
+          path: result
+      - name: Publish persistent preview
+        id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Return preview and screenshots
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          r = json.loads(Path('result/result.json').read_text())
+          url = os.environ['PAGE_URL'].rstrip('/') + '/' + r['preview'] + '/'
+          body = f'''预览已就绪，当前代码：`{r['sha'][:12]}`。
+
+          **[打开网页，直接点击体验]({url})** · [查看改动／创建 PR]({r['pr_url']})
+
+          ![桌面效果]({url}screenshot.png)
+
+          [手机截图]({url}mobile.png) · [浏览器检查记录]({url}browser.json)
+
+          这是静态应用实验，数据保存在你自己的浏览器。路径检查通过不等于人工验收通过。
+          请在本页回复 `/harness 你的修改意见` 继续；不用新建 Issue。该轮链接固定保留。
+          '''
+          Path('comment.md').write_text(body)
+          subprocess.run(['gh','issue','comment',str(r['task']),'--repo',os.environ['GITHUB_REPOSITORY'],'--body-file','comment.md'],check=True)
+          PY
+      - name: Report preview deployment failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TASK: ${{ needs.work.outputs.task }}
+        run: |
+          gh issue comment "$TASK" --repo "$GITHUB_REPOSITORY" --body "预览发布未完成，不能当成可访问预览。请在本次 Actions 运行中重试失败的发布 Job；代码和本地任务检查点仍保留。"
+
+  record:
+    needs: [work, publish]
+    if: always() && needs.work.outputs.publish == 'true'
+    runs-on: [self-hosted, macOS, ARM64, he-skeleton]
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Persist deployment outcome
+        env:
+          HARNESS_ROOT: ${{ runner.workspace }}/../..
+          TASK: ${{ needs.work.outputs.task }}
+          DEPLOY_RESULT: ${{ needs.publish.result }}
+          PAGE_URL: ${{ needs.publish.outputs.page_url }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          python3 - <<'PYCODE'
+          import fcntl, json, os
+          from pathlib import Path
+          assert os.environ['TASK'].isdigit()
+          session = Path(os.environ['HARNESS_ROOT']).resolve() / 'sessions' / os.environ['TASK']
+          with (session / 'lock').open('w') as lock:
+              fcntl.flock(lock, fcntl.LOCK_EX)
+              p = session / 'state.json'
+              state = json.loads(p.read_text())
+              if state.get('run_id') == os.environ['GITHUB_RUN_ID']:
+                  state['status'] = 'waiting_review' if os.environ['DEPLOY_RESULT'] == 'success' else 'preview_failed'
+                  state['page_url'] = os.environ['PAGE_URL']
+                  tmp = p.with_suffix('.tmp')
+                  tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2))
+                  tmp.replace(p)
+          PYCODE
