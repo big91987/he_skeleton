@@ -1,0 +1,26 @@
+name: Local runner connectivity
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    if: github.actor == github.repository_owner && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, macOS, ARM64, he-skeleton]
+    timeout-minutes: 5
+    steps:
+      - name: Verify execution tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/bin:$PATH"
+          test "$(uname -s)" = Darwin
+          command -v git >/dev/null
+          command -v python3 >/dev/null
+          command -v node >/dev/null
+          command -v codex >/dev/null
+          python3 --version
+          node --version
+          codex --version
+          echo 'GitHub -> local Runner connectivity verified.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'No model invocation or application acceptance test was performed.' >> "$GITHUB_STEP_SUMMARY"
