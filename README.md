@@ -1,4 +1,8 @@
-# Harness Engineering 实验
+# Harness Engineering 脚手架
+
+**业务实验入口：[he_skeleton_lab](https://github.com/big91987/he_skeleton_lab)。本仓库维护脚手架，不在这里发业务测试 Issue。**
+
+版本同步与分工见 [仓库边界](docs/repository-boundaries.md)。以下使用流程在 lab 执行。
 
 用 GitHub Issue／PR 交任务，本机 Codex 干活，浏览器检查后发布可点击的网页预览。第一版只支持无构建步骤的 HTML/CSS/JS 静态应用；可以用 localStorage，不能冒充真实后端、登录系统或 GPU 验收。
 
