@@ -131,4 +131,32 @@ class PublishRecovery(unittest.TestCase):
             self.assertEqual(json.loads((root/'tmp/harness-output/result.json').read_text())['sha'],'verified-sha')
             self.assertIn('publish=true',(root/'output').read_text())
 
+class ExperimentIsolation(unittest.TestCase):
+    def test_distinct_branches_and_main_have_distinct_state_roots(self):
+        root=Path('/tmp/harness')
+        a, sa=loop.experiment_context(root,'codex/harness-test-a')
+        b, sb=loop.experiment_context(root,'codex/harness-test-b')
+        self.assertNotEqual(a,b)
+        self.assertNotEqual(sa,sb)
+        self.assertEqual(loop.experiment_context(root,''),(root,''))
+        self.assertEqual(loop.experiment_context(root,'codex/harness-test-a'),(a,sa))
+        with self.assertRaises(ValueError):loop.experiment_context(root,'main')
+
+    def test_stop_on_experiment_does_not_change_main_session(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            main=root/'sessions/7';main.mkdir(parents=True)
+            (main/'state.json').write_text('original main state')
+            event={'repository':{'owner':{'login':'owner'},'full_name':'owner/repo'},
+                   'sender':{'login':'owner'},'inputs':{'task':'7','instruction':'stop'}}
+            p=root/'event.json';p.write_text(json.dumps(event))
+            env={'GITHUB_EVENT_PATH':str(p),'GITHUB_EVENT_NAME':'workflow_dispatch',
+                 'GITHUB_REPOSITORY':'owner/repo','GITHUB_RUN_ID':'200','HARNESS_ROOT':str(root),
+                 'RUNNER_TEMP':str(root/'tmp'),'HARNESS_EXPERIMENT':'codex/harness-test-a'}
+            with patch.dict(os.environ,env), patch.object(loop,'gh'), patch.object(loop,'run_agent') as agent:
+                loop.main();agent.assert_not_called()
+            self.assertEqual((main/'state.json').read_text(),'original main state')
+            scoped,_=loop.experiment_context(root,env['HARNESS_EXPERIMENT'])
+            self.assertEqual(json.loads((scoped/'sessions/7/state.json').read_text())['status'],'stopped')
+
 if __name__=='__main__':unittest.main()

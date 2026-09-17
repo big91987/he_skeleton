@@ -28,14 +28,21 @@ python3 scripts/bootstrap_project.py <owner>/<product> --directory <product-chec
 
 一键接入不等于业务验收通过；仍须在该产品仓库完成实际 Issue→反馈→预览验证。目前应用执行器仍以静态网页验证为范围，后端项目配置尚待扩展。
 
-## 自动拉取上游并提出升级
+## 在业务测试分支验证源仓库修复
 
-在脚手架目录执行，无需手动更新本地上游 checkout：
+机制问题只在 he_skeleton 修复并提交。然后从脚手架目录执行：
 
 ```sh
-python3 scripts/update_project.py <owner>/<product> --publish-pr
+python3 scripts/update_project.py <owner>/<product> \
+  --ref <upstream-branch-or-sha> \
+  --branch codex/harness-test-<scenario> \
+  --run --task <issue-number> --instruction 'clarify 检查需求并提出必要问题'
 ```
 
-默认读取 GitHub 上游 main 最新提交，用临时快照运行上游测试、校验托管文件及 Python/JavaScript 语法，然后创建仅含托管文件的升级 PR。省略 `--publish-pr` 只做检查。可用 `--ref <branch-or-sha>` 验证尚未合并的脚手架修复。
+脚本下载上游提交，运行测试，创建或更新业务测试分支，只同步托管文件。默认上游 ref 为 main。目标分支首次从业务默认分支创建，后续只追加提交；业务 app 不覆盖，托管文件有自行修改则停止。不创建升级 PR，不更新任何一边的 main。
 
-要求 gh 已登录且有目标仓库写权限、本机安装 Python、Git 和 Node。业务 app 不覆盖；托管文件相对 manifest 有修改时停止。同一源版本和业务基线已有开放升级 PR 时复用链接。默认分支不直接修改；PR 合并后，再在业务 Issue 继续运行，真实预览部署与业务验收另行验证。脚本按需运行，不安装定时任务。
+发现问题回源仓库修复，再运行相同命令更新同一测试分支。重复运行该分支会保留它自己的 Session；换测试分支会开启独立 Session。可省略 --run 只同步，或在 GitHub Actions 的 Run workflow 中选择该测试分支继续反馈。同一个 Issue 可被不同测试分支使用；评论里的 /harness 仍属于主线入口，不用于继续分支实验。
+
+测试分支的 Agent 代码产出使用独立任务分支，Session 与预览写入该实验的目录。预览及截图上传到运行的 github-pages artifact，不部署主线 Pages；解压其中 artifact.tar 后打开对应页面即可检查。测试分支输入使用 Issue，不直接改已有 PR 分支。当前应用仍限静态网页。
+
+上游验证通过后独立合并发布；业务主线何时升级另行决定。要求 gh 已登录且有目标仓库写权限，以及 Python、Git、Node。该命令按需运行，没有安装定时任务。

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download latest Harness, validate it, and propose a managed-files-only product upgrade."""
+"""Download latest Harness, validate it, and install it on an isolated product test branch."""
 import argparse
 import hashlib
 import io
@@ -64,14 +64,25 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repository", help="owner/product repository")
     parser.add_argument("--ref", default="main", help="Upstream branch/tag/SHA; default main")
-    parser.add_argument("--publish-pr", action="store_true", help="Publish an upgrade branch and PR after validation")
+    parser.add_argument("--branch", required=True, help="Target codex/harness-test-* branch; created from product default branch")
+    parser.add_argument("--run", action="store_true", help="Dispatch the test branch after synchronization")
+    parser.add_argument("--task", type=int, help="Existing product Issue number")
+    parser.add_argument("--instruction", default="clarify 检查需求并提出必要问题")
     args = parser.parse_args()
+    if not args.branch.startswith("codex/harness-test-") or subprocess.run(
+            ["git", "check-ref-format", "--branch", args.branch], capture_output=True).returncode:
+        raise ValueError("Use a valid codex/harness-test-* branch")
+    if args.run and (not args.task or args.task <= 0):
+        raise ValueError("--run requires a positive --task")
     if args.repository == UPSTREAM:
         raise ValueError("Target must be a separate product repository")
     revision = api(f"repos/{UPSTREAM}/commits/{urllib.parse.quote(args.ref, safe='')}")["sha"]
     info = api(f"repos/{args.repository}")
     base = info["default_branch"]
-    head = api(f"repos/{args.repository}/git/ref/heads/{base}")["object"]["sha"]
+    branches = api(f"repos/{args.repository}/git/matching-refs/heads/{args.branch}")
+    existing_branch = next((b for b in branches if b["ref"] == "refs/heads/" + args.branch), None)
+    head = existing_branch["object"]["sha"] if existing_branch else api(
+        f"repos/{args.repository}/git/ref/heads/{base}")["object"]["sha"]
     with tempfile.TemporaryDirectory(prefix="harness-update-") as folder:
         root = Path(folder)
         source, product = root / "source", root / "product"
@@ -94,28 +105,27 @@ def main():
         subprocess.run(["node", "--check", str(product / "harness/browser.cjs")], check=True)
         print("Validated upstream:", revision, "Product base:", head, flush=True)
         print("Changed managed files:", ", ".join(changes) or "none", flush=True)
-        if not changes or not args.publish_pr:
-            return
-        branch = "codex/harness-update-" + revision[:12] + "-" + head[:8]
-        existing = api(f"repos/{args.repository}/pulls?state=open&head=" + urllib.parse.quote(info['owner']['login'] + ':' + branch))
-        if existing:
-            print(existing[0]["html_url"])
-            return
-        # Base is pinned; never write the default branch or force-update a product task branch.
-        tree = api(f"repos/{args.repository}/git/trees", "POST", {
-            "base_tree": api(f"repos/{args.repository}/git/commits/{head}")["tree"]["sha"],
-            "tree": [{"path": name, "mode": "100644", "type": "blob", "content": content}
-                     for name, content in changes.items()]})
-        commit = api(f"repos/{args.repository}/git/commits", "POST", {
-            "message": "Update Harness to " + revision[:12], "tree": tree["sha"], "parents": [head]})
-        api(f"repos/{args.repository}/git/refs", "POST", {"ref": "refs/heads/" + branch, "sha": commit["sha"]})
-        pr = api(f"repos/{args.repository}/pulls", "POST", {
-            "title": "Update Harness to " + revision[:12], "head": branch, "base": base,
-            "body": "Sync managed infrastructure from " + UPSTREAM + "@" + revision +
-            ". Business files are preserved. Upstream unit tests and copied Python/JavaScript syntax checks passed. "
-            "After merge, use `/harness publish` on an existing verified task to check preview delivery, "
-            "or `/harness <feedback>` for a new execution round. Live workflow validation is still pending."})
-        print(pr["html_url"])
+        if changes:
+            tree = api(f"repos/{args.repository}/git/trees", "POST", {
+                "base_tree": api(f"repos/{args.repository}/git/commits/{head}")["tree"]["sha"],
+                "tree": [{"path": name, "mode": "100644", "type": "blob", "content": content}
+                         for name, content in changes.items()]})
+            commit = api(f"repos/{args.repository}/git/commits", "POST", {
+                "message": "Test Harness " + revision[:12], "tree": tree["sha"], "parents": [head]})
+            if existing_branch:
+                api(f"repos/{args.repository}/git/refs/heads/{args.branch}", "PATCH",
+                    {"sha": commit["sha"], "force": False})
+            else:
+                api(f"repos/{args.repository}/git/refs", "POST",
+                    {"ref": "refs/heads/" + args.branch, "sha": commit["sha"]})
+        elif not existing_branch:
+            api(f"repos/{args.repository}/git/refs", "POST",
+                {"ref": "refs/heads/" + args.branch, "sha": head})
+        print("Test branch: https://github.com/" + args.repository + "/tree/" + args.branch)
+        if args.run:
+            api(f"repos/{args.repository}/actions/workflows/harness.yml/dispatches", "POST",
+                {"ref": args.branch, "inputs": {"task": str(args.task), "instruction": args.instruction}}, raw=True)
+            print("Dispatched test branch; follow its Actions run. No main update or upgrade PR.")
 
 
 if __name__ == "__main__":

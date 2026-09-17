@@ -15,6 +15,8 @@ on:
         required: true
         default: '继续检查'
         type: string
+env:
+  HARNESS_EXPERIMENT: ${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref_name, 'codex/harness-test-') && github.ref_name || '' }}
 permissions:
   contents: read
 concurrency:
@@ -23,7 +25,7 @@ concurrency:
 jobs:
   work:
     if: >-
-      github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.ref == 'refs/heads/main' &&
+      github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && (github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/codex/harness-test-'))) &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'harness')) ||
        (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/harness')))
@@ -39,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Execute persistent task
         id: task
@@ -65,7 +67,11 @@ jobs:
           python3 - <<'PYCODE'
           import os, tarfile
           from pathlib import Path
-          root = Path(os.environ['HARNESS_ROOT']).resolve() / 'previews'
+          root = Path(os.environ['HARNESS_ROOT']).resolve()
+          if os.environ.get('HARNESS_EXPERIMENT'):
+              import hashlib
+              root = root / 'experiments' / hashlib.sha256(os.environ['HARNESS_EXPERIMENT'].encode()).hexdigest()[:16]
+          root = root / 'previews'
           with tarfile.open(Path(os.environ['RUNNER_TEMP']) / 'artifact.tar', 'w', format=tarfile.GNU_FORMAT) as archive:
               for path in sorted(root.rglob('*')):
                   if path.is_symlink():
@@ -81,9 +87,30 @@ jobs:
           path: ${{ runner.temp }}/artifact.tar
           compression-level: 0
           retention-days: 1
+      - name: Record isolated experiment result
+        if: steps.task.outputs.publish == 'true' && env.HARNESS_EXPERIMENT != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HARNESS_ROOT: ${{ runner.workspace }}/../..
+          TASK: ${{ steps.task.outputs.task }}
+        run: |
+          python3 - <<'PYCODE'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          scope = hashlib.sha256(os.environ['HARNESS_EXPERIMENT'].encode()).hexdigest()[:16]
+          path = Path(os.environ['HARNESS_ROOT']).resolve() / 'experiments' / scope / 'sessions' / os.environ['TASK'] / 'state.json'
+          state = json.loads(path.read_text())
+          state['status'] = 'waiting_review'
+          tmp = path.with_suffix('.tmp')
+          tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2))
+          tmp.replace(path)
+          url = 'https://github.com/' + os.environ['GITHUB_REPOSITORY'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID']
+          body = '实验分支 `' + os.environ['HARNESS_EXPERIMENT'] + '` 检查完成。预览及截图在本次运行的 github-pages artifact 中（解压 artifact.tar 后打开 index.html）。没有部署或覆盖主线 Pages。继续测试请在 Actions 选择同一分支。' + url
+          subprocess.run(['gh','issue','comment',os.environ['TASK'],'--repo',os.environ['GITHUB_REPOSITORY'],'--body',body],check=True)
+          PYCODE
   publish:
     needs: work
-    if: needs.work.outputs.publish == 'true'
+    if: needs.work.outputs.publish == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -137,7 +164,7 @@ jobs:
 
   record:
     needs: [work, publish]
-    if: always() && needs.work.outputs.publish == 'true'
+    if: always() && needs.work.outputs.publish == 'true' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, macOS, ARM64, he-skeleton]
     timeout-minutes: 2
     permissions: {}
