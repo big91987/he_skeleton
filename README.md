@@ -6,7 +6,7 @@ Use GitHub Issues/PRs as the user interface and a local self-hosted Runner as th
 
 - Repository initialized with an owner-only, manually triggered connectivity workflow.
 - No Issue/PR event currently starts local execution.
-- Runner registered as `he-skeleton-local`; the user-level macOS service is active. Connectivity test pending.
+- Runner registered as `he-skeleton-local`; the user-level macOS service is active. Connectivity test passed: [run 35201703061](https://github.com/big91987/he_skeleton/actions/runs/35201703061).
 - Agent execution, persisted sessions, human feedback resumption, screenshots and preview deployment are not connected yet.
 
 ## Directory layout
