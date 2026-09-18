@@ -39,10 +39,35 @@ jobs:
       publish: ${{ steps.task.outputs.publish }}
       task: ${{ steps.task.outputs.task }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
+      - name: Download exact execution revision
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          python3 - <<'PYCODE'
+          import io, os, subprocess, tarfile, tempfile
+          from pathlib import Path
+          data = subprocess.run(['gh','api','repos/' + os.environ['GITHUB_REPOSITORY'] + '/tarball/' + os.environ['GITHUB_SHA']], capture_output=True, check=True, timeout=90).stdout
+          root = Path(tempfile.mkdtemp(prefix='harness-source-', dir=os.environ['RUNNER_TEMP']))
+          with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
+              for entry in archive.getmembers():
+                  parts = Path(entry.name).parts[1:]
+                  if not parts:
+                      continue
+                  target = root.joinpath(*parts)
+                  if not target.resolve().is_relative_to(root):
+                      raise ValueError('Snapshot path escapes source directory')
+                  if entry.isdir():
+                      target.mkdir(parents=True, exist_ok=True)
+                  elif entry.isfile():
+                      target.parent.mkdir(parents=True, exist_ok=True)
+                      target.write_bytes(archive.extractfile(entry).read())
+                  else:
+                      raise ValueError('Snapshot contains unsupported link')
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write('HARNESS_SOURCE=' + str(root) + '\n')
+          PYCODE
       - name: Execute persistent task
         id: task
         env:
@@ -50,7 +75,7 @@ jobs:
           HARNESS_ROOT: ${{ runner.workspace }}/../..
         run: |
           export PATH="/opt/homebrew/bin:$PATH"
-          python3 harness/loop.py
+          python3 "$HARNESS_SOURCE/harness/loop.py"
       - name: Upload public task result
         if: steps.task.outputs.publish == 'true'
         uses: actions/upload-artifact@v4
