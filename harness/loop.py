@@ -157,6 +157,11 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     run_url = f'https://github.com/{repo}/actions/runs/' + os.environ['GITHUB_RUN_ID']
     prefix = f'repos/{repo}'
+    def delivery_metadata():
+        return {'scope': scope or 'main', 'experiment': experiment,
+                'published_path': ('experiments/' + scope + '/' if scope else 'main/') + state['preview'],
+                'preview_kind': 'static-web',
+                'screenshots': [['桌面运行截图', 'screenshot.png'], ['手机运行截图', 'mobile.png']]}
     def comment(body):
         # Every public response identifies the originating event/run.
         gh('POST', f'{prefix}/issues/{task}/comments', {'body':(('实验分支：`' + experiment + '`。继续测试请在 Actions 选择同一分支运行，不使用主线 /harness 评论入口。\n\n') if experiment else '') + body + f'\n\n[执行记录]({run_url}) · `{event_id}`'})
@@ -178,7 +183,7 @@ def main():
                 raise ValueError('No saved preview to publish')
             summary = next((entry['agent']['summary'] for entry in reversed(state['history']) if 'agent' in entry), '')
             atomic(output/'result.json', {'task':task,'summary':summary,'preview':state['preview'],
-                                         'pr_url':state['pr_url'],'sha':state['source_sha'],'event_id':event_id})
+                                         'pr_url':state['pr_url'],'sha':state['source_sha'],'event_id':event_id, **delivery_metadata()})
             state['status'] = 'preview_pending'
             state['run_id'] = os.environ['GITHUB_RUN_ID']
             state['processed'].append(event_id)
@@ -299,15 +304,16 @@ def main():
             (root/'previews/index.html').write_text('<!doctype html><meta charset="utf-8"><title>Harness previews</title><h1>实验预览</h1><p>静态网页实验；每一轮链接固定，旧版本不会被新版本覆盖。</p><ul>' + ''.join(
                 f'<li><a href="{p.relative_to(root/"previews").as_posix()}">{html.escape(str(p.parent.relative_to(root/"previews")))}</a></li>' for p in links) + '</ul>')
             # Only safe preview files and public result go into uploaded artifacts.
+            state['preview'] = preview_rel
             atomic(output/'result.json', {'task':task,'summary':result['summary'], 'preview':preview_rel,
-                                         'pr_url':state['pr_url'], 'sha':sha, 'event_id':event_id})
+                                         'pr_url':state['pr_url'], 'sha':sha, 'event_id':event_id, **delivery_metadata()})
             state['status'] = 'preview_pending'
             state['preview'] = preview_rel
             atomic(state_path, state)
             with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
                 f.write('publish=true\n')
                 f.write('task=' + str(task) + '\n')
-            comment(result['summary'] + f'\n\n浏览器路径检查通过，已保存任务分支。[查看改动／创建 PR]({state["pr_url"]})。预览交付完成后另附结果（测试分支使用运行附件）。尚未通过人工验收。')
+            comment(result['summary'] + f'\n\n浏览器路径检查通过，已保存任务分支。[查看改动／创建 PR]({state["pr_url"]})。预览交付完成后另附结果。尚未通过人工验收。')
         except Exception as error:
             state['status'] = 'blocked'
             atomic(state_path, state)

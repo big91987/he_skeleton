@@ -68,16 +68,15 @@ jobs:
           import os, tarfile
           from pathlib import Path
           root = Path(os.environ['HARNESS_ROOT']).resolve()
-          if os.environ.get('HARNESS_EXPERIMENT'):
-              import hashlib
-              root = root / 'experiments' / hashlib.sha256(os.environ['HARNESS_EXPERIMENT'].encode()).hexdigest()[:16]
-          root = root / 'previews'
+          roots = [('main', root / 'previews')]
+          roots += [('experiments/' + p.name, p / 'previews') for p in (root / 'experiments').glob('*') if p.is_dir()]
           with tarfile.open(Path(os.environ['RUNNER_TEMP']) / 'artifact.tar', 'w', format=tarfile.GNU_FORMAT) as archive:
-              for path in sorted(root.rglob('*')):
-                  if path.is_symlink():
-                      raise ValueError('Preview archive must not contain symlinks')
-                  if path.is_file():
-                      archive.add(path, arcname=path.relative_to(root).as_posix(), recursive=False)
+              for prefix, preview in roots:
+                  for path in sorted(preview.rglob('*')):
+                      if path.is_symlink():
+                          raise ValueError('Delivery archive must not contain symlinks')
+                      if path.is_file():
+                          archive.add(path, arcname=prefix + '/' + path.relative_to(preview).as_posix(), recursive=False)
           PYCODE
       - name: Upload Pages archive
         if: steps.task.outputs.publish == 'true'
@@ -87,42 +86,27 @@ jobs:
           path: ${{ runner.temp }}/artifact.tar
           compression-level: 0
           retention-days: 1
-      - name: Record isolated experiment result
-        if: steps.task.outputs.publish == 'true' && env.HARNESS_EXPERIMENT != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HARNESS_ROOT: ${{ runner.workspace }}/../..
-          TASK: ${{ steps.task.outputs.task }}
-        run: |
-          python3 - <<'PYCODE'
-          import hashlib, json, os, subprocess
-          from pathlib import Path
-          scope = hashlib.sha256(os.environ['HARNESS_EXPERIMENT'].encode()).hexdigest()[:16]
-          path = Path(os.environ['HARNESS_ROOT']).resolve() / 'experiments' / scope / 'sessions' / os.environ['TASK'] / 'state.json'
-          state = json.loads(path.read_text())
-          state['status'] = 'waiting_review'
-          tmp = path.with_suffix('.tmp')
-          tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2))
-          tmp.replace(path)
-          url = 'https://github.com/' + os.environ['GITHUB_REPOSITORY'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID']
-          body = '实验分支 `' + os.environ['HARNESS_EXPERIMENT'] + '` 检查完成。预览及截图在本次运行的 github-pages artifact 中（解压 artifact.tar 后打开 index.html）。没有部署或覆盖主线 Pages。继续测试请在 Actions 选择同一分支。' + url
-          subprocess.run(['gh','issue','comment',os.environ['TASK'],'--repo',os.environ['GITHUB_REPOSITORY'],'--body',body],check=True)
-          PYCODE
   publish:
     needs: work
-    if: needs.work.outputs.publish == 'true' && github.ref == 'refs/heads/main'
+    if: needs.work.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       pages: write
       id-token: write
       issues: write
+      pull-requests: write
+      contents: read
     outputs:
       page_url: ${{ steps.deployment.outputs.page_url }}
     environment:
-      name: github-pages
+      name: harness-evidence
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           name: task-result
@@ -130,30 +114,11 @@ jobs:
       - name: Publish persistent preview
         id: deployment
         uses: actions/deploy-pages@v4
-      - name: Return preview and screenshots
+      - name: Publish verified delivery card to Issue and PR
         env:
           GH_TOKEN: ${{ github.token }}
           PAGE_URL: ${{ steps.deployment.outputs.page_url }}
-        run: |
-          python3 - <<'PY'
-          import json, os, subprocess
-          from pathlib import Path
-          r = json.loads(Path('result/result.json').read_text())
-          url = os.environ['PAGE_URL'].rstrip('/') + '/' + r['preview'] + '/'
-          body = f'''预览已就绪，当前代码：`{r['sha'][:12]}`。
-
-          **[打开网页，直接点击体验]({url})** · [查看改动／创建 PR]({r['pr_url']})
-
-          ![桌面效果]({url}screenshot.png)
-
-          [手机截图]({url}mobile.png) · [浏览器检查记录]({url}browser.json)
-
-          这是静态应用实验，数据保存在你自己的浏览器。路径检查通过不等于人工验收通过。
-          请在本页回复 `/harness 你的修改意见` 继续；不用新建 Issue。该轮链接固定保留。
-          '''
-          Path('comment.md').write_text(body)
-          subprocess.run(['gh','issue','comment',str(r['task']),'--repo',os.environ['GITHUB_REPOSITORY'],'--body-file','comment.md'],check=True)
-          PY
+        run: python3 harness/delivery.py result/result.json --base-url "$PAGE_URL"
       - name: Report preview deployment failure
         if: failure()
         env:
@@ -164,7 +129,7 @@ jobs:
 
   record:
     needs: [work, publish]
-    if: always() && needs.work.outputs.publish == 'true' && github.ref == 'refs/heads/main'
+    if: always() && needs.work.outputs.publish == 'true'
     runs-on: [self-hosted, macOS, ARM64, he-skeleton]
     timeout-minutes: 2
     permissions: {}
@@ -181,7 +146,11 @@ jobs:
           import fcntl, json, os
           from pathlib import Path
           assert os.environ['TASK'].isdigit()
-          session = Path(os.environ['HARNESS_ROOT']).resolve() / 'sessions' / os.environ['TASK']
+          root = Path(os.environ['HARNESS_ROOT']).resolve()
+          if os.environ.get('HARNESS_EXPERIMENT'):
+              import hashlib
+              root = root / 'experiments' / hashlib.sha256(os.environ['HARNESS_EXPERIMENT'].encode()).hexdigest()[:16]
+          session = root / 'sessions' / os.environ['TASK']
           with (session / 'lock').open('w') as lock:
               fcntl.flock(lock, fcntl.LOCK_EX)
               p = session / 'state.json'

@@ -11,7 +11,7 @@ import tempfile
 import urllib.parse
 
 UPSTREAM = "big91987/he_skeleton"
-MANAGED = ["harness/agent.py", "harness/loop.py", "harness/browser.cjs",
+MANAGED = ["harness/agent.py", "harness/loop.py", "harness/browser.cjs", "harness/delivery.py",
            ".github/workflows/harness.yml", ".github/ISSUE_TEMPLATE/task.yml"]
 
 
