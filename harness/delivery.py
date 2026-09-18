@@ -21,9 +21,9 @@ def card(result, base, evidence, repo, run_url):
     body = ["<!-- harness-delivery:" + str(result["task"]) + ":" + result.get("scope", "main") + " -->",
             "## 本轮交付与验证", "",
             f"代码版本：[`{sha[:12]}`](https://github.com/{repo}/commit/{sha}) · [执行记录]({run_url})", "",
-            result["summary"], "",
+            "<details><summary>开发记录（不作为验收结论）</summary>", "", result["summary"], "", "</details>", "",
             "**自动检查：" + ("通过" if evidence["passed"] else "失败") +
-            f"，共 {len(evidence.get('performed', []))} 个操作与断言。人工验收：待确认。", "",
+            f"**，共 {len(evidence.get('performed', []))} 个操作与断言。人工验收：待确认。", "",
             f"[查看验证记录]({base}browser.json)", ""]
     for title, filename in result.get("screenshots", []):
         body += [f"### {title}", f"![{title}]({base}{filename})", ""]
