@@ -1,14 +1,20 @@
-# Harness Engineering 实验
+# Harness Engineering 脚手架
 
-用 GitHub Issue／PR 交任务，本机 Codex 干活，浏览器检查后发布可点击的网页预览。第一版只支持无构建步骤的 HTML/CSS/JS 静态应用；可以用 localStorage，不能冒充真实后端、登录系统或 GPU 验收。
+**业务实验入口：[reading_list](https://github.com/big91987/reading_list)。本仓库维护脚手架，不在这里发业务测试 Issue。**
+
+版本同步与分工见 [仓库边界](docs/repository-boundaries.md)。以下使用流程在 业务项目 执行。
+
+用 GitHub Issue／PR 提交研发任务，本机 Agent 读取完整项目上下文并交付代码或文档。产品类型和技术栈由用户与项目决定。验证方式由项目选择；未配置可执行验证器时明确标记“待验证”，不强行生成网页，也不宣称通过验收。详见 [项目配置](docs/project-configuration.md)。
 
 ## 怎么试
 
-1. 仓库所有者打开 **Issues → New issue → 交给 Agent 做一个网页**，描述需求。带 `harness` 标签的新 Issue 自动开始。
-2. 也可以在已有 Issue 或同仓库 PR 评论 `/harness 你的要求`。普通聊天不触发执行。
+1. 仓库所有者打开 **Issues → New issue → 交给 Agent 处理研发任务**，描述需求。带 `harness` 标签的新 Issue 自动开始。默认先只读澄清；模板选择“直接实施”可跳过首轮确认。
+2. 也可以在已有 Issue 或同仓库 PR 评论 `/harness 你的要求`。普通聊天不触发执行。`/harness clarify 需要检查的问题` 强制本轮只读澄清。
 3. Agent 如果需要澄清，会在原页面问你，然后结束 Job。回复 `/harness 你的回答`，它会恢复原工作区继续。
 4. 执行结束后，原页面会出现检查结果、任务分支、预览链接和截图。点预览直接体验。
 5. 有意见继续回复 `/harness 修改意见`。每轮预览有独立地址，旧版本不会被覆盖。
+发布失败但业务检查已通过时，回复 `/harness publish` 可只重试预览发布，不再调用模型。
+
 6. 点击“查看改动／创建 PR”进入 GitHub 审查；不自动批准或合并。
 
 先一次只提交一个命令，等结果回来再回复。初期流水线全局串行；GitHub concurrency 不是完整 FIFO 队列，短时间连续提交多个待执行命令可能替换 pending run。被取消的命令可以在前一轮完成后重发。
@@ -19,8 +25,8 @@
 
 - 只有仓库所有者能启动／重新运行本地任务；外部评论不会运行本机代码。
 - 工作流固定从默认分支读取 Harness 程序，不执行 PR 自带的工作流或安装脚本。
-- PR 接入只导入 `app/` 中的静态文件；不支持 fork PR。
-- 实现只发布 `app/` 文件。外部修改任务分支时拒绝覆盖，需要重新对齐工作区。
+- PR 接入导入完整普通文件工作区；不支持 fork PR。
+- 实现提交完整项目内的变更，禁止任务修改 Harness 控制文件。外部修改任务分支时拒绝覆盖，需要重新对齐工作区。
 - 每轮最多 3 次实现／浏览器检查；每次 Agent 调用限时 8 分钟，整个工作 Job 限时 30 分钟。
 - `/harness stop` 停止后续推进。中断正在执行的任务请到 Actions 点击 **Cancel workflow**；停止评论不会抢占当前 Job。
 - 自动浏览器路径来自实现方的 `acceptance.json`，不是独立产品验收；截图也不能证明所有功能正确。

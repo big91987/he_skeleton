@@ -15,10 +15,13 @@ SCHEMA = {
 }
 
 
-def run_agent(workspace, prompt, evidence, timeout=480):
+def run_agent(workspace, prompt, evidence, timeout=480, read_only=False):
     evidence.mkdir(parents=True, exist_ok=True)
     schema = evidence / "schema.json"
-    schema.write_text(json.dumps(SCHEMA))
+    contract = json.loads(json.dumps(SCHEMA))
+    if read_only:
+        contract['properties']['status']['enum'] = ['needs_input']
+    schema.write_text(json.dumps(contract))
     result_file = evidence / "result.json"
     result_file.unlink(missing_ok=True)
     # Do not forward Actions/GitHub tokens to the coding process.
@@ -27,7 +30,7 @@ def run_agent(workspace, prompt, evidence, timeout=480):
                     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
                     "http_proxy", "https_proxy", "all_proxy", "no_proxy"}}
     command = ["codex", "exec", "--ignore-user-config", "--ephemeral",
-               "--sandbox", "workspace-write", "-c", 'approval_policy="never"',
+               "--sandbox", "read-only" if read_only else "workspace-write", "-c", 'approval_policy="never"',
                "-c", "features.skip_host_skill_discovery=true",
                "-c", 'model_provider="harness_http"',
                "-c", 'model_providers.harness_http={name="OpenAI HTTPS",wire_api="responses",requires_openai_auth=true,supports_websockets=false}',
@@ -55,6 +58,8 @@ def run_agent(workspace, prompt, evidence, timeout=480):
     if process.returncode != 0 or not result_file.exists():
         raise RuntimeError("Agent execution failed; private runtime log retained locally")
     result = json.loads(result_file.read_text())
+    if read_only and result.get("status") != "needs_input":
+        raise ValueError("Clarification stage cannot advance to implementation")
     if result.get("status") not in {"needs_input", "ready"}:
         raise ValueError("Invalid agent result")
     if result["status"] == "needs_input" and not result.get("question", "").strip():

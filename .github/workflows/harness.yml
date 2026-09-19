@@ -15,6 +15,8 @@ on:
         required: true
         default: '继续检查'
         type: string
+env:
+  HARNESS_EXPERIMENT: ${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref_name, 'codex/harness-test-') && github.ref_name || '' }}
 permissions:
   contents: read
 concurrency:
@@ -23,7 +25,7 @@ concurrency:
 jobs:
   work:
     if: >-
-      github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.ref == 'refs/heads/main' &&
+      github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && (github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/codex/harness-test-'))) &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'harness')) ||
        (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/harness')))
@@ -37,10 +39,35 @@ jobs:
       publish: ${{ steps.task.outputs.publish }}
       task: ${{ steps.task.outputs.task }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          persist-credentials: false
+      - name: Download exact execution revision
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          python3 - <<'PYCODE'
+          import io, os, subprocess, tarfile, tempfile
+          from pathlib import Path
+          data = subprocess.run(['gh','api','repos/' + os.environ['GITHUB_REPOSITORY'] + '/tarball/' + os.environ['GITHUB_SHA']], capture_output=True, check=True, timeout=90).stdout
+          root = Path(tempfile.mkdtemp(prefix='harness-source-', dir=os.environ['RUNNER_TEMP']))
+          with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
+              for entry in archive.getmembers():
+                  parts = Path(entry.name).parts[1:]
+                  if not parts:
+                      continue
+                  target = root.joinpath(*parts)
+                  if not target.resolve().is_relative_to(root):
+                      raise ValueError('Snapshot path escapes source directory')
+                  if entry.isdir():
+                      target.mkdir(parents=True, exist_ok=True)
+                  elif entry.isfile():
+                      target.parent.mkdir(parents=True, exist_ok=True)
+                      target.write_bytes(archive.extractfile(entry).read())
+                  else:
+                      raise ValueError('Snapshot contains unsupported link')
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write('HARNESS_SOURCE=' + str(root) + '\n')
+          PYCODE
       - name: Execute persistent task
         id: task
         env:
@@ -48,7 +75,7 @@ jobs:
           HARNESS_ROOT: ${{ runner.workspace }}/../..
         run: |
           export PATH="/opt/homebrew/bin:$PATH"
-          python3 harness/loop.py
+          python3 "$HARNESS_SOURCE/harness/loop.py"
       - name: Upload public task result
         if: steps.task.outputs.publish == 'true'
         uses: actions/upload-artifact@v4
@@ -56,11 +83,39 @@ jobs:
           name: task-result
           path: ${{ runner.temp }}/harness-output/result.json
           retention-days: 14
-      - name: Package all retained previews
+      - name: Package retained previews without platform tar dependencies
         if: steps.task.outputs.publish == 'true'
-        uses: actions/upload-pages-artifact@v3
+        env:
+          HARNESS_ROOT: ${{ runner.workspace }}/../..
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          python3 - <<'PYCODE'
+          import os, tarfile, tempfile, shutil
+          from pathlib import Path
+          root = Path(os.environ['HARNESS_ROOT']).resolve()
+          roots = [('main', root / 'previews')]
+          roots += [('experiments/' + p.name, p / 'previews') for p in (root / 'experiments').glob('*') if p.is_dir()]
+          stage = Path(tempfile.mkdtemp(prefix='delivery-site-', dir=os.environ['RUNNER_TEMP']))
+          (stage / 'index.html').write_text('<!doctype html><meta charset="utf-8"><title>交付证据</title><h1>交付证据</h1><p>请从对应 Issue 或 PR 的交付卡片访问具体版本。</p>')
+          for prefix, preview in roots:
+              for path in sorted(preview.rglob('*')):
+                  if path.is_symlink():
+                      raise ValueError('Delivery archive must not contain symlinks')
+                  if path.is_file():
+                      dest = stage / prefix / path.relative_to(preview)
+                      dest.parent.mkdir(parents=True, exist_ok=True)
+                      shutil.copyfile(path, dest)
+          with tarfile.open(Path(os.environ['RUNNER_TEMP']) / 'artifact.tar', 'w', format=tarfile.GNU_FORMAT) as archive:
+              archive.add(stage, arcname='.')
+          PYCODE
+      - name: Upload Pages archive
+        if: steps.task.outputs.publish == 'true'
+        uses: actions/upload-artifact@v4
         with:
-          path: ${{ runner.workspace }}/../../previews
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          compression-level: 0
+          retention-days: 1
   publish:
     needs: work
     if: needs.work.outputs.publish == 'true'
@@ -70,12 +125,18 @@ jobs:
       pages: write
       id-token: write
       issues: write
+      pull-requests: write
+      contents: read
     outputs:
       page_url: ${{ steps.deployment.outputs.page_url }}
     environment:
-      name: github-pages
+      name: harness-evidence
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           name: task-result
@@ -83,30 +144,11 @@ jobs:
       - name: Publish persistent preview
         id: deployment
         uses: actions/deploy-pages@v4
-      - name: Return preview and screenshots
+      - name: Publish verified delivery card to Issue and PR
         env:
           GH_TOKEN: ${{ github.token }}
           PAGE_URL: ${{ steps.deployment.outputs.page_url }}
-        run: |
-          python3 - <<'PY'
-          import json, os, subprocess
-          from pathlib import Path
-          r = json.loads(Path('result/result.json').read_text())
-          url = os.environ['PAGE_URL'].rstrip('/') + '/' + r['preview'] + '/'
-          body = f'''预览已就绪，当前代码：`{r['sha'][:12]}`。
-
-          **[打开网页，直接点击体验]({url})** · [查看改动／创建 PR]({r['pr_url']})
-
-          ![桌面效果]({url}screenshot.png)
-
-          [手机截图]({url}mobile.png) · [浏览器检查记录]({url}browser.json)
-
-          这是静态应用实验，数据保存在你自己的浏览器。路径检查通过不等于人工验收通过。
-          请在本页回复 `/harness 你的修改意见` 继续；不用新建 Issue。该轮链接固定保留。
-          '''
-          Path('comment.md').write_text(body)
-          subprocess.run(['gh','issue','comment',str(r['task']),'--repo',os.environ['GITHUB_REPOSITORY'],'--body-file','comment.md'],check=True)
-          PY
+        run: python3 harness/delivery.py result/result.json --base-url "$PAGE_URL"
       - name: Report preview deployment failure
         if: failure()
         env:
@@ -134,7 +176,11 @@ jobs:
           import fcntl, json, os
           from pathlib import Path
           assert os.environ['TASK'].isdigit()
-          session = Path(os.environ['HARNESS_ROOT']).resolve() / 'sessions' / os.environ['TASK']
+          root = Path(os.environ['HARNESS_ROOT']).resolve()
+          if os.environ.get('HARNESS_EXPERIMENT'):
+              import hashlib
+              root = root / 'experiments' / hashlib.sha256(os.environ['HARNESS_EXPERIMENT'].encode()).hexdigest()[:16]
+          session = root / 'sessions' / os.environ['TASK']
           with (session / 'lock').open('w') as lock:
               fcntl.flock(lock, fcntl.LOCK_EX)
               p = session / 'state.json'
