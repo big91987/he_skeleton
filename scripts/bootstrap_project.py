@@ -53,14 +53,14 @@ def main():
     branch=run(['git','symbolic-ref','--short','HEAD'],checkout,True).strip()
     if info['default_branch']!='main' or branch!='main':
         raise SystemExit('Initial bootstrap currently requires the main branch checkout')
-    seeded=[]
-    sync(source,checkout,a.ref)
+    changed_files=sync(source,checkout,a.ref)
     if not a.activate:
         print('Prepared files only. Review diff, then rerun on a clean checkout with --activate to deploy.')
         return
-    # Stage only the managed files: never commit the application's unrelated changes.
+    # Stage only changed tool files and newly installed templates.
     manifest=json.loads((checkout/'harness-upstream.json').read_text())
-    run(['git','add','harness-upstream.json',*manifest['files'],*seeded],checkout)
+    if changed_files:
+        run(['git','add',*changed_files],checkout)
     changed=subprocess.run(['git','diff','--cached','--quiet'],cwd=checkout).returncode
     if changed==1:run(['git','commit','-m','Update pinned Harness infrastructure'],checkout)
     elif changed!=0:raise SystemExit('Cannot inspect staged diff')

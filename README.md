@@ -2,6 +2,8 @@
 
 **业务实验入口：[reading_list](https://github.com/big91987/reading_list)。本仓库维护脚手架，不在这里发业务测试 Issue。**
 
+Workflow 和 Issue 表单由模板首次复制，之后归业务仓库 Owner 维护；工具链升级不覆盖它们。模板差异可单独查看，见 [Workflow 定制](docs/workflow-ownership.md)。
+
 版本同步与分工见 [仓库边界](docs/repository-boundaries.md)。以下使用流程在 业务项目 执行。
 
 用 GitHub Issue／PR 提交研发任务，本机 Agent 读取完整项目上下文并交付代码或文档。产品类型和技术栈由用户与项目决定。验证方式由项目选择；未配置可执行验证器时明确标记“待验证”，不强行生成网页，也不宣称通过验收。详见 [项目配置](docs/project-configuration.md)。
@@ -11,7 +13,7 @@
 1. 仓库所有者打开 **Issues → New issue → 交给 Agent 处理研发任务**，描述需求。带 `harness` 标签的新 Issue 自动开始。默认先只读澄清；模板选择“直接实施”可跳过首轮确认。
 2. 也可以在已有 Issue 或同仓库 PR 评论 `/harness 你的要求`。普通聊天不触发执行。`/harness clarify 需要检查的问题` 强制本轮只读澄清。
 3. Agent 如果需要澄清，会在原页面问你，然后结束 Job。回复 `/harness 你的回答`，它会恢复原工作区继续。
-4. 执行结束后，原页面会出现检查结果、任务分支、预览链接和截图。点预览直接体验。
+4. 执行结束后，原页面会出现结果和任务分支。项目配置浏览器验证时额外提供预览与截图；未配置验证器时标记待验证。
 5. 有意见继续回复 `/harness 修改意见`。每轮预览有独立地址，旧版本不会被覆盖。
 发布失败但业务检查已通过时，回复 `/harness publish` 可只重试预览发布，不再调用模型。
 
@@ -42,7 +44,7 @@
     tools/                      # 固定版本 Playwright 和 Chromium
     sessions/<issue-or-pr>/
       state.json                # 任务状态、用户反馈、Agent 总结、已处理事件
-      workspace/app/            # 跨轮保留的代码
+      workspace/                # 跨轮保留的完整项目
       round-*/                  # 私有调用记录和验证证据
     previews/task-*/round-*/     # 可长期打开的固定版本网页和截图
 ```
@@ -51,7 +53,7 @@ Session 独立于进程和 Job。第一版用持久化任务历史＋工作区�
 
 ## 工程实现
 
-- `.github/workflows/harness.yml`：事件、权限、执行和 Pages 发布。
+- `templates/.github/workflows/harness.yml`：默认研发流程模板，首次安装复制到业务仓库 `.github/workflows/harness.yml`；之后由 Owner 定制。
 - `harness/loop.py`：命令解析、检查点、有限修复循环、分支交付和公开结果。
 - `harness/agent.py`：Codex 适配；读取现有本机登录，使用 HTTPS，单次调用不加载用户工具配置。没有复制登录凭据到仓库。
 - `harness/browser.cjs`：固定 Playwright 执行器，只允许有限的声明式点击／输入／断言；不在宿主机执行 Agent 生成的测试脚本。浏览器禁止外部网络请求。

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Download latest Harness, validate it, and install it on an isolated product test branch."""
 import argparse
-import hashlib
 import io
 import json
 from pathlib import Path
@@ -11,8 +10,7 @@ import tempfile
 import urllib.parse
 
 UPSTREAM = "big91987/he_skeleton"
-MANAGED = ["harness/agent.py", "harness/project.py", "harness/loop.py", "harness/browser.cjs", "harness/delivery.py",
-           ".github/workflows/harness.yml", ".github/ISSUE_TEMPLATE/task.yml"]
+from sync_project import MANAGED, TEMPLATES, plan, template_diff
 
 
 def api(path, method="GET", body=None, raw=False):
@@ -44,20 +42,9 @@ def snapshot(repository, revision, destination):
 
 
 def prepare(source, product, revision):
-    manifest = product / "harness-upstream.json"
-    previous = json.loads(manifest.read_text()) if manifest.exists() else {"files": {}}
-    contents = {name: (source / name).read_bytes() for name in MANAGED}
-    for name in MANAGED:
-        path = product / name
-        if path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() != previous["files"].get(name):
-            raise ValueError("Product modified managed file: " + name)
-    result = {name: data.decode() for name, data in contents.items()}
-    result["harness-upstream.json"] = json.dumps({
-        "repository": "https://github.com/" + UPSTREAM, "revision": revision,
-        "files": {name: hashlib.sha256(data).hexdigest() for name, data in contents.items()}
-    }, indent=2) + "\n"
-    return {name: data for name, data in result.items()
-            if not (product / name).exists() or (product / name).read_text() != data}
+    paths = {name: name for name in MANAGED} | TEMPLATES
+    contents = {name: (source / path).read_bytes() for name, path in paths.items()}
+    return {name: data.decode() for name, data in plan(product, contents, revision).items()}
 
 
 def main():
@@ -65,6 +52,8 @@ def main():
     parser.add_argument("repository", help="owner/product repository")
     parser.add_argument("--ref", default="main", help="Upstream branch/tag/SHA; default main")
     parser.add_argument("--branch", required=True, help="Target codex/harness-test-* branch; created from product default branch")
+    parser.add_argument("--template-diff", action="store_true", help="Print template differences only; no branch writes or dispatch")
+    parser.add_argument("--workflow", default="harness.yml", help="Project-owned workflow file to dispatch with --run")
     parser.add_argument("--run", action="store_true", help="Dispatch the test branch after synchronization")
     parser.add_argument("--task", type=int, help="Existing product Issue number")
     parser.add_argument("--instruction", default="clarify 检查需求并提出必要问题")
@@ -72,6 +61,8 @@ def main():
     if not args.branch.startswith("codex/harness-test-") or subprocess.run(
             ["git", "check-ref-format", "--branch", args.branch], capture_output=True).returncode:
         raise ValueError("Use a valid codex/harness-test-* branch")
+    if args.template_diff and args.run:
+        raise ValueError('--template-diff cannot be combined with --run')
     if args.run and (not args.task or args.task <= 0):
         raise ValueError("--run requires a positive --task")
     if args.repository == UPSTREAM:
@@ -89,6 +80,9 @@ def main():
         source.mkdir(); product.mkdir()
         snapshot(UPSTREAM, revision, source)
         snapshot(args.repository, head, product)
+        if args.template_diff:
+            template_diff(product, {name: (source / path).read_bytes() for name, path in TEMPLATES.items()})
+            return
         # Existing upstream tests use committed revisions, so reconstruct the downloaded snapshot locally.
         for command in (["git", "init", "-q"], ["git", "add", "."],
                         ["git", "-c", "user.name=Harness", "-c", "user.email=harness@example.invalid",
@@ -123,7 +117,7 @@ def main():
                 {"ref": "refs/heads/" + args.branch, "sha": head})
         print("Test branch: https://github.com/" + args.repository + "/tree/" + args.branch)
         if args.run:
-            api(f"repos/{args.repository}/actions/workflows/harness.yml/dispatches", "POST",
+            api(f"repos/{args.repository}/actions/workflows/{urllib.parse.quote(args.workflow, safe='')}/dispatches", "POST",
                 {"ref": args.branch, "inputs": {"task": str(args.task), "instruction": args.instruction}}, raw=True)
             print("Dispatched test branch; follow its Actions run. No main update or upgrade PR.")
 
