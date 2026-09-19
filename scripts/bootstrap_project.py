@@ -54,10 +54,6 @@ def main():
     if info['default_branch']!='main' or branch!='main':
         raise SystemExit('Initial bootstrap currently requires the main branch checkout')
     seeded=[]
-    if not (checkout/'app').exists():
-        (checkout/'app').mkdir()
-        (checkout/'app/index.html').write_text('<!doctype html><meta charset="utf-8"><title>Project start</title><h1>Ready for a product task</h1>\n')
-        seeded=['app/index.html']
     sync(source,checkout,a.ref)
     if not a.activate:
         print('Prepared files only. Review diff, then rerun on a clean checkout with --activate to deploy.')

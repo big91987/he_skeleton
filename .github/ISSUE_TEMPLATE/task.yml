@@ -1,11 +1,11 @@
-name: 交给 Agent 做一个网页
-description: 真实 Codex 执行、澄清、浏览器检查、预览和反馈续跑
-title: '[实验] '
+name: 交给 Agent 处理研发任务
+description: 提交需求、文档、原型、代码修改或验证任务；产品形式由项目决定
+title: '[任务] '
 labels: ['harness']
 body:
   - type: markdown
     attributes:
-      value: '当前仅仓库所有者可以触发本地执行。第一版支持 HTML/CSS/JS 静态网页和浏览器本地存储，不支持真实后端或账号系统。'
+      value: '说明目标和已有材料即可，不限定产品类型或技术栈。当前仅仓库所有者能触发执行；环境或验证能力不足时会明确反馈。'
   - type: dropdown
     id: start
     attributes:
@@ -18,13 +18,17 @@ body:
   - type: textarea
     id: request
     attributes:
-      label: 想做什么
-      description: 用业务语言描述需求。已有代码可在同仓库 PR 评论 /harness 接管。
-      placeholder: 做一个待办清单，能创建、完成、删除任务，刷新后不丢。如果有重要问题，先问我。
+      label: 想完成什么
+      description: 描述目标、范围、约束和需要交付的内容，不必预先选择产品类型。
     validations:
       required: true
   - type: textarea
+    id: inputs
+    attributes:
+      label: 已有材料
+      description: 填写仓库内 PRD、AC、设计、原型、代码或相关 PR 的位置；外部材料需说明如何访问。
+  - type: textarea
     id: acceptance
     attributes:
-      label: 我准备怎么体验
-      placeholder: 新增一条任务，完成它，刷新页面，确认状态保留。
+      label: 如何判断完成
+      description: 写出期望行为、验收标准、已有测试入口及运行环境要求。

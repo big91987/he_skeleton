@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 
 from agent import run_agent
+import project
 
 SOURCE = Path(__file__).resolve().parent.parent
 SUFFIXES = {'.html', '.css', '.js', '.json', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.ico', '.txt'}
@@ -80,7 +81,7 @@ def app_files(root):
     return files
 
 
-def publish_code(repo, branch, base_sha, files, message):
+def publish_code(repo, branch, base_sha, files, message, prefix_path="app/"):
     prefix = 'repos/' + repo
     try:
         head = gh('GET', prefix + '/git/ref/heads/' + branch)['object']['sha']
@@ -95,15 +96,15 @@ def publish_code(repo, branch, base_sha, files, message):
     old_tree = gh('GET', prefix + '/git/trees/' + commit['tree']['sha'] + '?recursive=1')
     if old_tree.get('truncated'):
         raise ValueError('Repository tree too large')
-    old = {x['path']: x for x in old_tree['tree'] if x['path'].startswith('app/') and x['type'] == 'blob'}
+    old = {x['path']: x for x in old_tree['tree'] if x['path'].startswith(prefix_path) and x['type'] == 'blob'}
     tree = []
     for name, data in files.items():
-        path = 'app/' + name
+        path = prefix_path + name
         blob_sha = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
         if old.get(path, {}).get('sha') != blob_sha:
             blob = gh('POST', prefix + '/git/blobs', {'content':base64.b64encode(data).decode(), 'encoding':'base64'})
-            tree.append({'path':path, 'mode':'100644', 'type':'blob', 'sha':blob['sha']})
-    for path in old.keys() - {'app/' + x for x in files}:
+            tree.append({'path':path, 'mode':old.get(path, {}).get('mode', '100644'), 'type':'blob', 'sha':blob['sha']})
+    for path in old.keys() - {prefix_path + x for x in files}:
         tree.append({'path':path, 'mode':'100644', 'type':'blob', 'sha':None})
     if not tree:
         return head
@@ -113,15 +114,15 @@ def publish_code(repo, branch, base_sha, files, message):
     return new_commit['sha']
 
 
-def restore_app(repo, sha, target):
+def restore_app(repo, sha, target, prefix_path="app/"):
     tree = gh('GET', f'repos/{repo}/git/trees/{sha}?recursive=1')
     if tree.get('truncated'):
         raise ValueError('Repository tree too large')
     for item in tree['tree']:
         path = item['path']
-        if not path.startswith('app/') or item['type'] != 'blob':
+        if not path.startswith(prefix_path) or item['type'] != 'blob':
             continue
-        name = Path(path[4:])
+        name = Path(path[len(prefix_path):])
         if '..' in name.parts or name.is_absolute() or item['mode'] == '120000':
             raise ValueError('Unsafe imported app path')
         if item.get('size', 0) > 2_000_000:
@@ -160,7 +161,7 @@ def main():
     def delivery_metadata():
         return {'scope': scope or 'main', 'experiment': experiment,
                 'published_path': ('experiments/' + scope + '/' if scope else 'main/') + state['preview'],
-                'preview_kind': 'static-web',
+                'preview_kind': state.get('delivery', {}).get('preview_kind', 'static-web'),
                 'screenshots': [['桌面运行截图', 'screenshot.png'], ['手机运行截图', 'mobile.png']]}
     def comment(body):
         # Every public response identifies the originating event/run.
@@ -183,7 +184,7 @@ def main():
                 raise ValueError('No saved preview to publish')
             summary = next((entry['agent']['summary'] for entry in reversed(state['history']) if 'agent' in entry), '')
             atomic(output/'result.json', {'task':task,'summary':summary,'preview':state['preview'],
-                                         'pr_url':state['pr_url'],'sha':state['source_sha'],'event_id':event_id, **delivery_metadata()})
+                                         'pr_url':state['pr_url'],'sha':state.get('delivery', {}).get('sha', state['source_sha']),'event_id':event_id, **delivery_metadata()})
             state['status'] = 'preview_pending'
             state['run_id'] = os.environ['GITHUB_RUN_ID']
             state['processed'].append(event_id)
@@ -219,15 +220,23 @@ def main():
             except urllib.error.HTTPError as error:
                 if error.code != 404:
                     raise
+        config = project.settings(SOURCE)
         workspace = session / 'workspace'
-        workspace.mkdir(exist_ok=True)
-        app = workspace / 'app'
-        if not app.exists():
-            app.mkdir()
-            restore_app(repo, source_sha, app)
+        if workspace.exists() and not state.get('workspace_version'):
+            raise ValueError('Legacy app-only session: start a new task to import the complete project')
+        if not workspace.exists():
+            staging = session / 'importing'
+            if staging.exists():
+                shutil.rmtree(staging)
+            staging.mkdir()
+            restore_app(repo, source_sha, staging, prefix_path='')
+            project.files(staging)
+            staging.rename(workspace)
+            state['workspace_version'] = 2
         elif 'pull_request' in issue and state.get('source_sha') not in {None, source_sha}:
-            comment('PR 分支已在外部更新。为避免覆盖持久化工作区，请新建任务接入该版本；本轮未执行。')
+            comment('PR 分支已在外部更新；本轮停止以免覆盖改动，请先对齐工作区。')
             return
+        before = project.files(workspace)
         state['round'] += 1
         state['status'] = 'running'
         state['run_id'] = os.environ['GITHUB_RUN_ID']
@@ -238,36 +247,30 @@ def main():
         evidence = session / f'round-{state["round"]}'
         evidence.mkdir()
         try:
-            prompt = ('You are implementing a small static web application in app/. Reply in Chinese. '
-                'Only edit files in app/. Do not touch host files, credentials, workflow configuration, git remotes or install dependencies. '
-                'No backend, no external network/CDNs. HTML/CSS/JS only; use localStorage for demo persistence. '
-                'Complete basic user journeys, not isolated buttons. Keep existing accepted behavior when revising. '
-                'If the user explicitly asks to clarify/inspect first or a key product choice blocks work, return needs_input with a concrete question and stop. '
-                'Follow the latest user feedback: if an earlier request to ask first has already been answered in history, continue implementation instead of asking again. '
-                'Otherwise implement and return ready. Never claim tests ran; the harness will test separately. '
-                'Also create app/acceptance.json: an array of browser steps proving the requested main user journey. '
-                'The array is flat: [{"action":"fill","label":"任务","value":"测试任务"},{"action":"click","role":"button","name":"新增"}]. No name/steps wrapper. '
-                'Each step has action fill/click/visible/absent/reload. Locate using label, or role+name, or exact text; fill has value. '
-                'Use accessible labels. This plan is implementation-authored evidence, not independent acceptance.\n'
-                + 'Original task:\n' + issue['title'] + '\n' + (issue['body'] or '')
-                + '\nDurable history:\n' + json.dumps(state['history'], ensure_ascii=False))
+            prompt = project.prompt(issue, state['history'], config)
             read_only = clarification_only(os.environ['GITHUB_EVENT_NAME'], issue['body'], instruction)
             if read_only:
                 prompt += ('\nCURRENT STAGE: CLARIFICATION ONLY. You must not implement or edit files. '
                            'Return needs_input and the specific question the user requested, or a concise scope confirmation. '
                            'This is a read-only stage enforced by the host. Do not treat the generic start instruction as a user answer.')
-            original_app = app_files(app) if read_only else None
+            original_app = before if read_only else None
             result = None
             for attempt in range(3):
                 result = run_agent(workspace, prompt, evidence / f'agent-{attempt + 1}', read_only=read_only)
-                if read_only and app_files(app) != original_app:
+                if read_only and project.files(workspace) != original_app:
                     raise RuntimeError('Read-only clarification modified app files')
                 if result['status'] == 'needs_input':
                     break
+                after = project.files(workspace)
+                project.check_control_changes(before, after)
+                verification = config.get('verification')
+                if not verification:
+                    break
+                app = workspace / verification['root']
                 app_files(app)
                 plan = app / 'acceptance.json'
                 if not plan.exists() or not json.loads(plan.read_text()):
-                    prompt += '\nCheck failed: write a nonempty acceptance.json proving the main interaction.'
+                    prompt += '\nConfigured browser check requires a nonempty acceptance.json.'
                     continue
                 browser_env = {'PATH':os.environ['PATH'], 'HOME':os.environ['HOME'],
                                'NODE_PATH':str(tools_root/'tools/node_modules')}
@@ -279,18 +282,26 @@ def main():
             else:
                 raise RuntimeError('Browser checks still fail after 3 bounded attempts')
             state['history'].append({'agent':result})
-            state['processed'].append(event_id)
             if result['status'] == 'needs_input':
+                state['processed'].append(event_id)
                 state['status'] = 'waiting_input'
                 atomic(state_path, state)
                 comment(result['summary'] + '\n\n**需要你反馈：**\n' + result['question'] + '\n\n回复 `/harness 你的意见` 即可继续；本轮执行现在结束。')
                 return
-            files = app_files(app)
-            sha = publish_code(repo, branch, source_sha, files, f'Harness task #{task}, round {state["round"]}')
+            files = project.files(workspace)
+            project.check_control_changes(before, files)
+            sha = publish_code(repo, branch, source_sha, files, f'Harness task #{task}, round {state["round"]}', prefix_path='')
             state['source_sha'] = sha
             if not state.get('pr_url'):
                 existing = gh('GET', f'{prefix}/pulls?head=' + urllib.parse.quote(repo.split('/')[0]+':'+branch) + '&state=open')
                 state['pr_url'] = existing[0]['html_url'] if existing else f'https://github.com/{repo}/compare/{base}...{branch}?expand=1'
+            if not config.get('verification'):
+                state['status'] = 'needs_verification'
+                state['processed'].append(event_id)
+                atomic(state_path, state)
+                comment(result['summary'] + '\n\n代码/文档已保存：[查看改动](' + state['pr_url'] + ')。项目尚未配置可执行的验证器，本轮未通过自动验收；没有生成网页或发布应用预览。')
+                return
+            files = app_files(app)
             preview_rel = f'task-{task}/round-{state["round"]}'
             preview = root/'previews'/preview_rel
             preview.mkdir(parents=True, exist_ok=True)
@@ -305,9 +316,11 @@ def main():
                 f'<li><a href="{p.relative_to(root/"previews").as_posix()}">{html.escape(str(p.parent.relative_to(root/"previews")))}</a></li>' for p in links) + '</ul>')
             # Only safe preview files and public result go into uploaded artifacts.
             state['preview'] = preview_rel
+            state['delivery'] = {'sha':sha, 'preview':preview_rel, 'preview_kind':'static-web'}
             atomic(output/'result.json', {'task':task,'summary':result['summary'], 'preview':preview_rel,
                                          'pr_url':state['pr_url'], 'sha':sha, 'event_id':event_id, **delivery_metadata()})
             state['status'] = 'preview_pending'
+            state['processed'].append(event_id)
             state['preview'] = preview_rel
             atomic(state_path, state)
             with open(os.environ['GITHUB_OUTPUT'], 'a') as f:

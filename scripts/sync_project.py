@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 
-MANAGED = ['harness/agent.py', 'harness/loop.py', 'harness/browser.cjs', 'harness/delivery.py',
+MANAGED = ['harness/agent.py', 'harness/project.py', 'harness/loop.py', 'harness/browser.cjs', 'harness/delivery.py',
            '.github/workflows/harness.yml', '.github/ISSUE_TEMPLATE/task.yml']
 
 

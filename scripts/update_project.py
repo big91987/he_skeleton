@@ -11,7 +11,7 @@ import tempfile
 import urllib.parse
 
 UPSTREAM = "big91987/he_skeleton"
-MANAGED = ["harness/agent.py", "harness/loop.py", "harness/browser.cjs", "harness/delivery.py",
+MANAGED = ["harness/agent.py", "harness/project.py", "harness/loop.py", "harness/browser.cjs", "harness/delivery.py",
            ".github/workflows/harness.yml", ".github/ISSUE_TEMPLATE/task.yml"]
 
 
@@ -100,7 +100,7 @@ def main():
             path = product / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content)
-        for name in ("harness/agent.py", "harness/loop.py"):
+        for name in ("harness/agent.py", "harness/project.py", "harness/loop.py"):
             compile((product / name).read_text(), name, "exec")
         subprocess.run(["node", "--check", str(product / "harness/browser.cjs")], check=True)
         print("Validated upstream:", revision, "Product base:", head, flush=True)
