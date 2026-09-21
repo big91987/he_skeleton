@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "entries": [
+    "AGENTS.md",
+    "docs/README.md",
+    "docs/00-global/project.md"
+  ],
+  "stages": {
+    "requirements": {
+      "skills": [
+        "resumable-batch-grilling",
+        "defining-platform-products-cn"
+      ],
+      "artifact": "docs/04-implementation/tasks/{task}/prd.md"
+    },
+    "design": {
+      "skills": [
+        "platform-architecture-v2-cn"
+      ],
+      "artifact": "docs/04-implementation/tasks/{task}/design.md"
+    },
+    "plan": {
+      "skills": [
+        "managing-engineering-delivery-cn"
+      ],
+      "artifact": "docs/04-implementation/tasks/{task}/implement.md"
+    },
+    "implementation": {
+      "skills": [
+        "trellis-before-dev",
+        "trellis-check",
+        "trellis-update-spec"
+      ],
+      "artifact": "docs/05-validation/tasks/{task}/validation.md"
+    }
+  },
+  "checks": [],
+  "max_attempts": 3,
+  "agent_timeout": 1200,
+  "check_timeout": 120,
+  "review_timeout": 480
+}

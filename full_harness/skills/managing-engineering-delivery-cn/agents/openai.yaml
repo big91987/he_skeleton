@@ -1,0 +1,4 @@
+interface:
+  display_name: "研发交付管理"
+  short_description: "把已确认需求和架构转成可协作、可验证、可交接的公共交付计划"
+  default_prompt: "使用 $managing-engineering-delivery-cn 为当前阶段建立里程碑、任务包、依赖、公共进度和验证闭环。"

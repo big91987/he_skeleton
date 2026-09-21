@@ -1,0 +1,23 @@
+name: 完整研发任务
+description: 从需求、文档、原型或现有代码开始，分阶段研发与评审；不限定产品形态。
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: 目标与预期行为
+      description: 要解决什么问题？谁会使用？现有项目希望改变什么？
+    validations:
+      required: true
+  - type: textarea
+    id: existing
+    attributes:
+      label: 已有材料
+      description: 填写 PRD、AC、设计、原型或现有代码的位置；没有可以留空。
+  - type: textarea
+    id: constraints
+    attributes:
+      label: 约束与验收
+      description: 兼容要求、环境限制、必须跑通的用户路径和已确认决定。
+  - type: markdown
+    attributes:
+      value: 提交表单不会启动 Agent。仓库 Owner 在评论中发送 `/develop`，或手动运行 Full development workflow。

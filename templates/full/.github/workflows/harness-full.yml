@@ -1,0 +1,315 @@
+name: Full development workflow
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: Existing Issue number
+        type: string
+        required: true
+      instruction:
+        description: Instruction, or reply token followed by answer
+        type: string
+        default: ''
+  issues:
+    types: [opened, labeled]
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+concurrency:
+  group: full-development-${{ github.repository }}
+  cancel-in-progress: false
+env:
+  FULL_STATE_ROOT: ${{ vars.FULL_STATE_ROOT }}
+jobs:
+  entry:
+    if: >-
+      github.actor == github.repository_owner && github.triggering_actor == github.repository_owner &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'harness-full')) ||
+       (github.event_name == 'issue_comment' && (github.event.comment.body == '/develop' || startsWith(github.event.comment.body, '/develop '))))
+    # All jobs must select the SAME persistent machine. Give only that Runner
+    # this unique label, and set FULL_STATE_ROOT to a private directory outside
+    # the checkout. Other OSes require changing these Owner-owned labels.
+    runs-on: [self-hosted, macOS, ARM64, he-full]
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      continue: ${{ steps.stage.outputs.continue }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: entry
+        id: stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL_PUBLIC: ${{ runner.temp }}/full-public-${{ github.run_id }}-entry
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          test -n "$FULL_STATE_ROOT" || { echo 'Configure private FULL_STATE_ROOT and the unique he-full Runner label first'; exit 1; }
+          python3 full_harness/runner.py entry
+      - name: Downloadable stage documents
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-${{ github.run_id }}-entry
+          path: ${{ runner.temp }}/full-public-${{ github.run_id }}-entry
+          if-no-files-found: ignore
+          retention-days: 30
+  requirements:
+    needs: entry
+    if: needs.entry.outputs.continue == 'true'
+    # All jobs must select the SAME persistent machine. Give only that Runner
+    # this unique label, and set FULL_STATE_ROOT to a private directory outside
+    # the checkout. Other OSes require changing these Owner-owned labels.
+    runs-on: [self-hosted, macOS, ARM64, he-full]
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      continue: ${{ steps.stage.outputs.continue }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: requirements
+        id: stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL_PUBLIC: ${{ runner.temp }}/full-public-${{ github.run_id }}-requirements
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          test -n "$FULL_STATE_ROOT" || { echo 'Configure private FULL_STATE_ROOT and the unique he-full Runner label first'; exit 1; }
+          python3 full_harness/runner.py requirements
+      - name: Downloadable stage documents
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-${{ github.run_id }}-requirements
+          path: ${{ runner.temp }}/full-public-${{ github.run_id }}-requirements
+          if-no-files-found: ignore
+          retention-days: 30
+  design:
+    needs: requirements
+    if: needs.requirements.outputs.continue == 'true'
+    # All jobs must select the SAME persistent machine. Give only that Runner
+    # this unique label, and set FULL_STATE_ROOT to a private directory outside
+    # the checkout. Other OSes require changing these Owner-owned labels.
+    runs-on: [self-hosted, macOS, ARM64, he-full]
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      continue: ${{ steps.stage.outputs.continue }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: design
+        id: stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL_PUBLIC: ${{ runner.temp }}/full-public-${{ github.run_id }}-design
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          test -n "$FULL_STATE_ROOT" || { echo 'Configure private FULL_STATE_ROOT and the unique he-full Runner label first'; exit 1; }
+          python3 full_harness/runner.py design
+      - name: Downloadable stage documents
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-${{ github.run_id }}-design
+          path: ${{ runner.temp }}/full-public-${{ github.run_id }}-design
+          if-no-files-found: ignore
+          retention-days: 30
+  plan:
+    needs: design
+    if: needs.design.outputs.continue == 'true'
+    # All jobs must select the SAME persistent machine. Give only that Runner
+    # this unique label, and set FULL_STATE_ROOT to a private directory outside
+    # the checkout. Other OSes require changing these Owner-owned labels.
+    runs-on: [self-hosted, macOS, ARM64, he-full]
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      continue: ${{ steps.stage.outputs.continue }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: plan
+        id: stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL_PUBLIC: ${{ runner.temp }}/full-public-${{ github.run_id }}-plan
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          test -n "$FULL_STATE_ROOT" || { echo 'Configure private FULL_STATE_ROOT and the unique he-full Runner label first'; exit 1; }
+          python3 full_harness/runner.py plan
+      - name: Downloadable stage documents
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-${{ github.run_id }}-plan
+          path: ${{ runner.temp }}/full-public-${{ github.run_id }}-plan
+          if-no-files-found: ignore
+          retention-days: 30
+  implementation:
+    needs: plan
+    if: needs.plan.outputs.continue == 'true'
+    # All jobs must select the SAME persistent machine. Give only that Runner
+    # this unique label, and set FULL_STATE_ROOT to a private directory outside
+    # the checkout. Other OSes require changing these Owner-owned labels.
+    runs-on: [self-hosted, macOS, ARM64, he-full]
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      continue: ${{ steps.stage.outputs.continue }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: implementation
+        id: stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL_PUBLIC: ${{ runner.temp }}/full-public-${{ github.run_id }}-implementation
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          test -n "$FULL_STATE_ROOT" || { echo 'Configure private FULL_STATE_ROOT and the unique he-full Runner label first'; exit 1; }
+          python3 full_harness/runner.py implementation
+      - name: Downloadable stage documents
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-${{ github.run_id }}-implementation
+          path: ${{ runner.temp }}/full-public-${{ github.run_id }}-implementation
+          if-no-files-found: ignore
+          retention-days: 30
+  review:
+    needs: implementation
+    if: needs.implementation.outputs.continue == 'true'
+    # All jobs must select the SAME persistent machine. Give only that Runner
+    # this unique label, and set FULL_STATE_ROOT to a private directory outside
+    # the checkout. Other OSes require changing these Owner-owned labels.
+    runs-on: [self-hosted, macOS, ARM64, he-full]
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      continue: ${{ steps.stage.outputs.continue }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: review
+        id: stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL_PUBLIC: ${{ runner.temp }}/full-public-${{ github.run_id }}-review
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          test -n "$FULL_STATE_ROOT" || { echo 'Configure private FULL_STATE_ROOT and the unique he-full Runner label first'; exit 1; }
+          python3 full_harness/runner.py review
+      - name: Downloadable stage documents
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-${{ github.run_id }}-review
+          path: ${{ runner.temp }}/full-public-${{ github.run_id }}-review
+          if-no-files-found: ignore
+          retention-days: 30
+  delivery:
+    needs: review
+    if: needs.review.outputs.continue == 'true'
+    # All jobs must select the SAME persistent machine. Give only that Runner
+    # this unique label, and set FULL_STATE_ROOT to a private directory outside
+    # the checkout. Other OSes require changing these Owner-owned labels.
+    runs-on: [self-hosted, macOS, ARM64, he-full]
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      continue: ${{ steps.stage.outputs.continue }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: delivery
+        id: stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL_PUBLIC: ${{ runner.temp }}/full-public-${{ github.run_id }}-delivery
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          test -n "$FULL_STATE_ROOT" || { echo 'Configure private FULL_STATE_ROOT and the unique he-full Runner label first'; exit 1; }
+          python3 full_harness/runner.py delivery
+      - name: Downloadable stage documents
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-${{ github.run_id }}-delivery
+          path: ${{ runner.temp }}/full-public-${{ github.run_id }}-delivery
+          if-no-files-found: ignore
+          retention-days: 30
+  report:
+    needs: [entry, requirements, design, plan, implementation, review, delivery]
+    if: always() && needs.entry.result == 'success'
+    # All jobs must select the SAME persistent machine. Give only that Runner
+    # this unique label, and set FULL_STATE_ROOT to a private directory outside
+    # the checkout. Other OSes require changing these Owner-owned labels.
+    runs-on: [self-hosted, macOS, ARM64, he-full]
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      continue: ${{ steps.stage.outputs.continue }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: report
+        id: stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL_PUBLIC: ${{ runner.temp }}/full-public-${{ github.run_id }}-report
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          test -n "$FULL_STATE_ROOT" || { echo 'Configure private FULL_STATE_ROOT and the unique he-full Runner label first'; exit 1; }
+          python3 full_harness/runner.py report
+      - name: Downloadable stage documents
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-${{ github.run_id }}-report
+          path: ${{ runner.temp }}/full-public-${{ github.run_id }}-report
+          if-no-files-found: ignore
+          retention-days: 30

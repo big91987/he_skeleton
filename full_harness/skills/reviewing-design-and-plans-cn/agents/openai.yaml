@@ -1,0 +1,4 @@
+interface:
+  display_name: "设计与计划评审"
+  short_description: "按研发阶段审查 PRD、架构设计与实施计划是否可交接"
+  default_prompt: "使用 $reviewing-design-and-plans-cn 评审当前阶段文档，并给出是否可进入下一阶段的结论。"
