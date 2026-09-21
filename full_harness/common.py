@@ -7,7 +7,7 @@ from pathlib import Path
 import signal
 import subprocess
 
-STAGES = ['requirements', 'design', 'plan', 'implementation', 'verification', 'review', 'delivery']
+STAGES = ['requirements', 'design', 'development', 'verification', 'review', 'delivery']
 CONTROL = ('.github/', '.codex/', '.agents/', 'harness/', 'full_harness/', '.harness/', '.trellis/scripts/')
 IGNORE = {'.git', '__pycache__', 'node_modules', '.venv', '.pytest_cache'}
 
@@ -88,22 +88,34 @@ def configuration(source):
     value = read_json(Path(source)/'.harness/full.json')
     if set(value) - {'version','entries','stages','checks','max_attempts','agent_timeout','check_timeout','review_timeout'}:
         raise ValueError('Unknown full workflow configuration')
-    if value.get('version') != 1:
+    if value.get('version') not in {1,2}:
         raise ValueError('Unsupported configuration version')
     for name in value['entries']:
         if not relative_file(source,name).is_file():
             raise ValueError('Project entry missing: '+name)
-    defaults = {'entry': '读取实际需求、文档和代码，判断阶段缺口和可复用依据；不能批准跳过验证或评审。', 'requirements': '明确本次目标、范围、用户完整主线和验收标准。仅在缺少用户决策时澄清；复用已有材料。 使用 $resumable-batch-grilling 管理需要澄清的决策；目标明确时不强制提问。', 'design': '依据确认的需求和当前实现，完成必要的接口、数据、兼容性与迁移设计，记录取舍。 使用 $platform-architecture-v2-cn 中适用的方法；非平台任务不扩展为平台架构设计。', 'plan': '依据需求与设计，拆成可验收任务，标明依赖、实现范围和真实验证方法。', 'implementation': '按确认任务实现代码，运行项目检查，修复失败，并更新实际变化涉及的规范和验证记录。', 'review': '独立核对需求、设计、代码和验证证据，审查完整用户路径、兼容性与可维护性。'}
+    # Owner configs from the unpublished nine-job profile retain their existing checks.
+    if value['version']==1:
+        stages=value['stages'];dev=stages.pop('implementation');plan=stages.pop('plan',{})
+        dev['skills']=list(dict.fromkeys(plan.get('skills',[])+dev['skills']))
+        dev['instruction']='拆解可验收任务并持续实现、验证和整改。'+dev.get('instruction','')
+        dev['inputs']=[];stages['development']=dev;value['version']=2
+        for check in value.get('checks',[]):
+            if 'stages' in check:check['stages']=list(dict.fromkeys('development' if x in {'plan','implementation'} else x for x in check['stages']))
+    defaults = {'entry':'核查当前任务和已有材料，判断可复用的阶段产物。',
+                'requirements':'明确目标、范围、用户主线与验收标准，必要时澄清，形成 PRD。',
+                'design':'依据已确认需求完成必要架构、接口、数据契约与兼容性设计。',
+                'development':'拆解任务并持续实现、检查、整改，交付真实验证证据。',
+                'review':'独立评审需求、设计、代码与真实验证证据。'}
     value['stages'].setdefault('entry', {'skills': []})
     value['stages'].setdefault('review', {'skills': ['trellis-check']})
-    if set(value['stages']) != {'entry', 'review', *STAGES[:4]}:
+    if set(value['stages']) != {'entry', 'review', *STAGES[:3]}:
         raise ValueError('Unknown or missing Agent stage')
     for stage, spec in value['stages'].items():
         if set(spec) - {'instruction','skills','inputs','artifact','review_skills'}:
             raise ValueError('Unknown Agent stage setting: ' + stage)
         spec.setdefault('instruction', re.sub(r'\$([a-zA-Z0-9_-]+)',lambda m:m[0] if m[1] in spec.get('skills',[]) else m[1],defaults[stage]))
         spec.setdefault('inputs', [])
-        spec.setdefault('review_skills', ['reviewing-design-and-plans-cn'] if stage in STAGES[:3] else [])
+        spec.setdefault('review_skills', ['reviewing-design-and-plans-cn'] if stage in STAGES[:2] else [])
         if not isinstance(spec['instruction'],str) or not spec['instruction'].strip():
             raise ValueError('Stage instruction must be nonempty text')
         for key in ['skills','review_skills','inputs']:
@@ -114,13 +126,13 @@ def configuration(source):
                 raise ValueError('Skill missing: '+name)
         for name in spec['inputs']:
             relative_file(source,name.replace('{task}','1'))
-        if stage not in STAGES[:4]:continue
+        if stage not in STAGES[:3]:continue
         if not spec.get('artifact'):
             raise ValueError('Stage must declare its handoff artifact')
         relative_file(source,spec['artifact'].replace('{task}','1'))
     for check in value.get('checks',[]):
         if not isinstance(check.get('name'),str) or not check['name']:raise ValueError('Check needs a name')
-        if any(x not in STAGES[:5] for x in check.get('stages',['implementation'])):raise ValueError('Invalid check stage')
+        if any(x not in STAGES[:4] for x in check.get('stages',['development'])):raise ValueError('Invalid check stage')
         if not isinstance(check.get('argv'),list) or not check['argv'] or not all(isinstance(x,str) and x for x in check['argv']):
             raise ValueError('Checks use explicit argument arrays')
         if set(check)-{'name','argv','cwd','stages'}:

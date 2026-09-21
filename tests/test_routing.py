@@ -20,41 +20,41 @@ class RoutingTests(unittest.TestCase):
     def decision(self,actions):
         return {'status':'ready','summary':'Assessed actual materials','question':'','decisions':[
             {'stage':stage,'action':action,'reason':'Based on current task and materials',
-             'evidence':(['code.py'] if stage=='implementation' else ['prd.md']) if action=='reuse' else []}
-            for stage,action in zip(runner.STAGES[:4],actions)]}
+             'evidence':(['code.py'] if stage=='development' else ['prd.md']) if action=='reuse' else []}
+            for stage,action in zip(runner.STAGES[:3],actions)]}
     def apply(self,result):
         router.validate(result,self.work,self.state)
         with patch.object(runner,'classify',return_value=result):runner.assess_entry(self.root,self.root,self.state)
     def test_idea_starts_requirements(self):
-        self.apply(self.decision(['run']*4));self.assertEqual(self.state['stage'],'requirements')
+        self.apply(self.decision(['run']*3));self.assertEqual(self.state['stage'],'requirements')
     def test_existing_prd_starts_design(self):
-        self.apply(self.decision(['reuse','run','run','run']));self.assertEqual(self.state['stage'],'design')
+        self.apply(self.decision(['reuse','run','run']));self.assertEqual(self.state['stage'],'requirements')
     def test_existing_code_enters_verification_not_delivery(self):
-        self.apply(self.decision(['reuse','not_applicable','not_applicable','reuse']))
-        self.assertEqual(self.state['stage'],'verification')
+        self.apply(self.decision(['reuse','not_applicable','reuse']))
+        self.assertEqual(self.state['stage'],'requirements')
         self.assertNotIn('review',self.state['completed'])
     def test_missing_evidence_cannot_skip_stage(self):
-        result=self.decision(['reuse','run','run','run']);result['decisions'][0]['evidence']=['missing.md']
+        result=self.decision(['reuse','run','run']);result['decisions'][0]['evidence']=['missing.md']
         with self.assertRaises(ValueError):router.validate(result,self.work,self.state)
     def test_escape_and_illegal_stage_are_rejected(self):
-        result=self.decision(['reuse','run','run','run']);result['decisions'][0]['evidence']=['../outside']
+        result=self.decision(['reuse','run','run']);result['decisions'][0]['evidence']=['../outside']
         with self.assertRaises(ValueError):router.validate(result,self.work,self.state)
-        result=self.decision(['run']*4);result['decisions'][-1]['stage']='delivery'
+        result=self.decision(['run']*3);result['decisions'][-1]['stage']='delivery'
         with self.assertRaises(ValueError):router.validate(result,self.work,self.state)
     def test_requirement_not_applicable_is_rejected(self):
-        with self.assertRaises(ValueError):router.validate(self.decision(['not_applicable']*4),self.work,self.state)
+        with self.assertRaises(ValueError):router.validate(self.decision(['not_applicable']*3),self.work,self.state)
     def test_clarification_pauses_entry(self):
         self.apply({'status':'needs_input','summary':'Need scope','question':'Which interface is in scope?','decisions':[]})
         self.assertEqual(self.state['stage'],'entry');self.assertEqual(self.state['status'],'needs_input')
     def test_existing_code_runs_real_check_without_builder(self):
         (self.work/'fixed').write_text('already correct')
-        self.state['completed']={'implementation':{'mode':'reuse'}}
+        self.state['completed']={'development':{'mode':'reuse'}}
         with patch.object(runner,'run_agent',side_effect=AssertionError('must not code')):
             runner.verify_stage(self.root,self.root,self.state)
         self.assertEqual(self.state['stage'],'review')
         self.assertEqual(self.state['completed']['verification']['checks'][0]['code'],0)
     def test_failure_returns_to_builder_then_rechecks(self):
-        self.state['completed']={'implementation':{'mode':'reuse'}}
+        self.state['completed']={'development':{'mode':'reuse'}}
         def repair(*args):(self.work/'fixed').write_text('repaired')
         with patch.object(runner,'run_agent',side_effect=repair) as builder:
             runner.verify_stage(self.root,self.root,self.state)

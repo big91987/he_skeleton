@@ -72,17 +72,30 @@ def new_state(source,session,task,repo,sha,branch,runner):
     return state
 
 
-def begin(state,instruction,sha,runner,run_id):
+def begin(state,instruction,sha,runner,run_id,session=None):
     if state['runner']!=runner:raise ValueError('Persistent state belongs to another Runner')
     if state['baseline']!=sha:raise ValueError('Base revision changed: reconcile in a new task before continuing; previous evidence cannot be reused silently')
     if state['status']=='delivered':raise ValueError('This task has delivered; start a new Issue for the next iteration')
-    if state['status'] in {'needs_input','blocked','waiting_review'}:
+    if state['status'] in {'needs_input','blocked','waiting_review','awaiting_approval'}:
         token=state['reply_token']
         if not instruction.startswith(token+' '):raise ValueError('Reply with /develop '+token+' followed by your answer or recovery instruction')
         instruction=instruction[len(token):].strip()
+    if state['status']=='awaiting_approval':
+        stage=state['stage']
+        if instruction=='approve':
+            if session is None:raise ValueError('Approval requires retained task files')
+            pending=state['pending_approval']
+            if material_hashes(session,state,stage)!=pending['files']:
+                raise ValueError('Documents changed after the confirmation request; review the new revision first')
+            state.setdefault('approvals',{})[stage]={**pending,'run_id':run_id}
+            state['stage']=next_stage(state,stage)
+            instruction='用户已明确确认 '+stage+' 阶段产物。继续下一阶段。'
+        else:
+            invalidate(state,stage)
+            state['feedback']='用户对阶段产物的修改意见：'+instruction
+        state.pop('pending_approval',None)
     if state['status']=='waiting_review':
-        state['stage']='entry'
-        for stage in ['implementation','verification','review','delivery']:state['completed'].pop(stage,None)
+        invalidate(state,'development')
     state.update(instruction=instruction,status='running',run_id=run_id)
     state.pop('reply_token',None)
     state.pop('reason',None)
@@ -158,8 +171,64 @@ def recover_session(session):
 def next_stage(state,after=None):
     start=STAGES.index(after)+1 if after else 0
     for stage in STAGES[start:]:
-        if stage not in state['completed']:return stage
+        if stage not in state['completed'] or (stage in STAGES[:2] and stage not in state.get('approvals',{})):
+            return stage
     return 'delivery'
+
+
+def invalidate(state,stage):
+    for name in STAGES[STAGES.index(stage):]:
+        state['completed'].pop(name,None)
+        state.get('approvals',{}).pop(name,None)
+    state['stage']=stage
+
+
+def material_hashes(session,state,stage):
+    done=state['completed'][stage]
+    names=set(done.get('artifacts',[])) | set(done.get('evidence',{}))
+    if done.get('artifact'):names.add(done['artifact'])
+    result={}
+    for name in sorted(names):
+        if name=='issue':data=json.dumps(state['task'],ensure_ascii=False,sort_keys=True).encode()
+        else:data=relative_file(session/'workspace',name).read_bytes()
+        result[name]=hashlib.sha256(data).hexdigest()
+    # A no-design decision is also a versioned decision the Owner must see and confirm.
+    result['@decision']=hashlib.sha256(json.dumps(done,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+    return result
+
+
+def request_approval(session,state,stage):
+    state['stage']=stage
+    state['pending_approval']={'stage':stage,'files':material_hashes(session,state,stage)}
+    pause(state,'awaiting_approval','请审查本阶段产物。确认后才进入下一阶段；回复修改意见则继续当前阶段。')
+
+
+def changed_approval(session,state):
+    for stage in STAGES[:2]:
+        approved=state.get('approvals',{}).get(stage)
+        if approved:
+            try:current=material_hashes(session,state,stage)
+            except (OSError,KeyError):return stage
+            if current!=approved['files']:return stage
+    return None
+
+
+def development(source,session,state):
+    """One visible development Job owns implementation, checks, review and delivery."""
+    for name in STAGES[:2]:
+        if name not in state.get('approvals',{}):
+            raise ValueError('Missing human confirmation: '+name)
+    while state['status']=='running':
+        changed=changed_approval(session,state)
+        if changed:
+            invalidate(state,changed)
+            state['feedback']='已确认产物变化，重新检查并请求人工确认。'
+        stage=state['stage']
+        if stage in STAGES[:3]:run_agent(source,session,state,stage)
+        elif stage=='verification':verify_stage(source,session,state)
+        elif stage=='review':review_stage(source,session,state)
+        elif stage=='delivery':deliver(session,state)
+        else:raise ValueError('Unknown development step: '+stage)
 
 
 def assess_entry(source,session,state):
@@ -181,15 +250,15 @@ def verify_stage(source,session,state,attempt=0):
     if attempt>=state['config']['max_attempts']:
         pause(state,'blocked','Verification repair limit reached');return
     workspace=session/'workspace'
-    checks=[c for c in state['config'].get('checks',[]) if set(c.get('stages',['implementation'])) & {'implementation','verification'}]
+    checks=[c for c in state['config'].get('checks',[]) if set(c.get('stages',['development'])) & {'development','verification'}]
     if not checks:raise ValueError('No Owner-configured verification checks; routing cannot bypass verification')
     if controls(workspace)!=state['controls']:raise ValueError('Execution controls changed')
     before=digest(workspace)
-    impl=state['completed'].get('implementation',{})
+    impl=state['completed'].get('development',{})
     # Reuse an exact matching, controller-produced gate; never a model claim.
     gate_path=session/'turns'/str(impl.get('turn','missing'))/'gate.json'
     gate=read_json(gate_path) if gate_path.exists() else {}
-    only_implementation=all('implementation' in c.get('stages',['implementation']) for c in checks)
+    only_implementation=all('development' in c.get('stages',['development']) for c in checks)
     if only_implementation and gate.get('status')=='passed' and gate.get('snapshot')==before:
         outcomes=gate['checks']
     else:
@@ -205,10 +274,10 @@ def verify_stage(source,session,state,attempt=0):
             if code in (124,125):raise ValueError('Verification environment unavailable: '+check['name'])
             if code:
                 state['feedback']=check['name']+' failed: '+log.read_text()[-6000:]
-                state['completed'].pop('implementation',None)
+                state['completed'].pop('development',None)
                 # Real check failure goes into the existing bounded implementation
                 # loop, not back to the human just because code was supplied.
-                run_agent(source,session,state,'implementation')
+                run_agent(source,session,state,'development')
                 if state['status']!='running':return
                 # A verification-only failing check must also be included in the
                 # implementation gate, so repaired code is checked before return.
@@ -219,6 +288,8 @@ def verify_stage(source,session,state,attempt=0):
 
 
 def run_agent(source,session,state,stage):
+    if stage in STAGES[:2] and stage in state['completed'] and stage not in state.get('approvals',{}):
+        request_approval(session,state,stage);return
     workspace=session/'workspace';state['turn']+=1
     state['stage']=stage
     checkpoint(session,state)
@@ -226,7 +297,7 @@ def run_agent(source,session,state,stage):
     evidence=session/'turns'/str(state['turn']);evidence.mkdir(parents=True)
     context={'source':str(source),'workspace':str(workspace),'session':str(session),'evidence':str(evidence),
              'task':state['task'],'instruction':state.get('instruction',''),'routing':state.get('routing'),'stage':stage,'config':state['config'],
-             'controls':state['controls'],'baseline':state['baseline'],
+             'controls':state['controls'],'baseline':state['baseline'],'approved_files':{n:h for approval in state.get('approvals',{}).values() for n,h in approval['files'].items() if n not in {'issue','@decision'}},
              'deadline_monotonic':time.monotonic()+state['config']['agent_timeout'],'node_path':os.environ.get('NODE_PATH','')}
     write_json(evidence/'context.json',context)
     sid=recover_session(session)
@@ -239,6 +310,11 @@ def run_agent(source,session,state,stage):
         if (evidence/'agent').exists():write_json(evidence/'agent/input.json',packet)
     gate=read_json(evidence/'gate.json') if (evidence/'gate.json').exists() else {'status':'blocked','reason':'Native Stop Hook did not supply a verified gate'}
     state['history'].append({'stage':stage,'turn':state['turn'],'session_id':sid,'agent':result['status'],'gate':gate['status']})
+    changed=changed_approval(session,state)
+    if changed:
+        invalidate(state,changed)
+        state['feedback']='已确认的 '+changed+' 产物发生变化；重新检查并提交人工确认。'
+        run_agent(source,session,state,changed);return
     if result['status']!='ready':
         pause(state,result['status'],result['question'] or result['summary']);return
     if gate['status']!='passed':
@@ -247,9 +323,11 @@ def run_agent(source,session,state,stage):
         pause(state,'blocked','Workspace changed after verification');return
     artifact=gate['artifact'];path=relative_file(workspace,artifact)
     state['completed'][stage]={'artifact':artifact,'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),
-                               'summary':result['summary'],'checks':gate.get('checks',[]),'turn':state['turn']}
-    state['stage']=next_stage(state,stage)
+                               'summary':result['summary'],'checks':gate.get('checks',[]),'turn':state['turn'],
+                               'artifacts':sorted(set([artifact]+result.get('artifacts',[])))}
     state['feedback']=''
+    if stage in STAGES[:2]:request_approval(session,state,stage)
+    else:state['stage']=next_stage(state,stage)
 
 
 def review_stage(source,session,state):
@@ -277,9 +355,8 @@ def review_stage(source,session,state):
             pause(state,result['status'],result['question'] or result['summary']);return
         state['feedback']=result['summary']+'\n'+'\n'.join(result['findings'])
         start=STAGES.index(result['return_stage'])
-        for stage in STAGES[start:]:state['completed'].pop(stage,None)
-        state['stage']=STAGES[start]
-        for stage in STAGES[start:4]:
+        invalidate(state,STAGES[start])
+        for stage in STAGES[start:3]:
             run_agent(source,session,state,stage)
             if state['status']!='running':return
         verify_stage(source,session,state)
@@ -288,6 +365,7 @@ def review_stage(source,session,state):
 
 
 def deliver(session,state):
+    if changed_approval(session,state):raise ValueError('Approved documents changed before delivery')
     workspace=session/'workspace';repo=state['repo']
     if state['completed'].get('review',{}).get('snapshot')!=digest(workspace):raise ValueError('Independent review no longer matches delivery contents')
     if controls(workspace)!=state['controls']:raise ValueError('Execution controls changed')
@@ -336,22 +414,36 @@ def report(session,state):
     run_url='https://github.com/'+state['repo']+'/actions/runs/'+str(state.get('run_id',''))
     rows=['<!-- harness-full -->','### 完整研发流程','#'+str(state['task']['number'])+' · '+state['status'],
           '| 阶段 | 状态 | 产物 / 说明 |','|---|---|---|']
-    for stage in STAGES:
+    for stage in STAGES[:3]:
         done=state['completed'].get(stage)
         status=({'reuse':'复用已有产物','not_applicable':'无需执行'}.get(done.get('mode'),'已检查')) if done else (state['status'] if stage==state['stage'] else '尚未完成')
+        if stage in STAGES[:2] and stage in state.get('approvals',{}):status='人工已确认'
+        elif stage in STAGES[:2] and done:status='等待人工确认'
+        elif stage=='development' and state['stage'] in STAGES[2:]:status=state['status']+' · '+state['stage']
         detail=(done or {}).get('artifact') or (done or {}).get('summary','')
         rows.append('| '+stage+' | '+status+' | '+str(detail).replace('|','/').replace('\n',' ')[:600]+' |')
     if state.get('routing'):
         rows+=['','**入口判别：** '+state['routing']['summary']]
         for item in state['routing'].get('decisions',[]):
             rows+=['- '+item['stage']+' · '+item['action']+'：'+item['reason']+'；依据：'+', '.join(item['evidence'])]
-    for stage in STAGES[:4]:
-        name=state['config']['stages'][stage]['artifact'].replace('{task}',str(state['task']['number']))
-        path=relative_file(session/'workspace',name)
-        if path.is_file() and path.suffix=='.md':
-            rows+=['','<details><summary>'+stage+' · '+name+'</summary>','',path.read_text()[:5000],'','</details>']
+    public_files={}
+    for stage in STAGES[:3]:
+        done=state['completed'].get(stage,{})
+        names=set(done.get('artifacts',[])) | set(done.get('evidence',{}))
+        names.add(state['config']['stages'][stage]['artifact'].replace('{task}',str(state['task']['number'])))
+        for name in sorted(names-{'issue'}):
+            path=relative_file(session/'workspace',name)
+            if path.is_file() and path.suffix in {'.md','.json','.yaml','.yml','.txt'}:
+                public_files[stage+'/'+name]=path
+                content=path.read_text()[:5000]
+                if path.suffix!='.md':content='```'+path.suffix[1:]+'\n'+content+'\n```'
+                rows+=['','<details><summary>'+stage+' · '+name+'</summary>','',content,'','</details>']
     if state.get('reason'):rows+=['',state['reason'][:8000]]
-    if state.get('reply_token'):rows+=['','回复：`/develop '+state['reply_token']+' 你的回答或恢复说明`']
+    if state.get('reply_token'):
+        if state['status']=='awaiting_approval':
+            rows+=['','**确认本版本：** `/develop '+state['reply_token']+' approve`',
+                   '**要求修改：** `/develop '+state['reply_token']+' 具体修改意见`']
+        else:rows+=['','回复：`/develop '+state['reply_token']+' 你的回答或恢复说明`']
     if state.get('pr_url'):rows+=['','交付 PR：'+state['pr_url']]
     rows+=['','[查看本次流水线及各阶段下载包]('+run_url+')。等待澄清不代表交付完成。']
     body='\n'.join(rows)
@@ -359,12 +451,9 @@ def report(session,state):
         body=body.replace(private_path,'<private-runtime>')
     public=Path(os.environ.get('FULL_PUBLIC',str(session/'public')));public.mkdir(parents=True,exist_ok=True)
     (public/'status.md').write_text(body)
-    # Publish only declared Markdown handoff artifacts, never sessions or prompts.
-    for stage in STAGES[:4]:
-        artifact=state['config']['stages'][stage]['artifact'].replace('{task}',str(state['task']['number']))
-        path=relative_file(session/'workspace',artifact)
-        if path.is_file() and path.suffix=='.md':
-            dest=public/stage/path.name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(path.read_bytes())
+    # Only declared/reused text artifacts, never private runtime state or session files.
+    for name,path in public_files.items():
+        dest=public/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(path.read_bytes())
     output('public',str(public))
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:f.write(body+'\n')
@@ -375,7 +464,7 @@ def report(session,state):
 
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('stage',choices=['entry',*STAGES,'report'])
+    parser=argparse.ArgumentParser();parser.add_argument('stage',choices=['entry','requirements','design','development','report'])
     args=parser.parse_args();source=Path(__file__).resolve().parents[1]
     event=read_json(os.environ['GITHUB_EVENT_PATH']);repo=os.environ['GITHUB_REPOSITORY']
     number,instruction=event_input(event,repo,os.environ['GITHUB_ACTOR'],os.environ['GITHUB_EVENT_NAME'])
@@ -399,7 +488,7 @@ def main():
             if state.get('pr_number'):
                 pr=api(repo,'pulls/'+str(state['pr_number']))
                 if pr.get('merged_at') or pr.get('state')=='closed':raise ValueError('Delivery PR is merged or closed; use a new Issue for another iteration')
-            begin(state,instruction,sha,os.environ['RUNNER_NAME'],os.environ['GITHUB_RUN_ID'])
+            begin(state,instruction,sha,os.environ['RUNNER_NAME'],os.environ['GITHUB_RUN_ID'],session)
         else:
             if state is None:raise ValueError('Task state is absent on this Runner; no silent session reset')
             if state['run_id']!=os.environ['GITHUB_RUN_ID']:raise ValueError('Run checkpoint does not match')
@@ -407,11 +496,9 @@ def main():
         try:
             if args.stage=='entry' and state['status']=='running' and state['stage']=='entry':
                 assess_entry(source,session,state)
-            if state['status']=='running' and args.stage==state['stage']:
-                if args.stage in STAGES[:4]:run_agent(source,session,state,args.stage)
-                elif args.stage=='verification':verify_stage(source,session,state)
-                elif args.stage=='review':review_stage(source,session,state)
-                elif args.stage=='delivery':deliver(session,state)
+            if state['status']=='running':
+                if args.stage in STAGES[:2] and args.stage==state['stage']:run_agent(source,session,state,args.stage)
+                elif args.stage=='development' and state['stage'] in STAGES[2:]:development(source,session,state)
         except Exception as error:
             pause(state,'blocked',str(error))
         finally:write_json(state_path,state)
@@ -419,8 +506,8 @@ def main():
         finally:write_json(state_path,state)
         output('continue','true' if state['status']=='running' else 'false')
         if args.stage=='entry':
-            for stage in STAGES:
-                output('run_'+stage,'true' if state['status']=='running' and stage not in state['completed'] else 'false')
+            for stage in STAGES[:3]:
+                output('run_'+stage,'true' if state['status']=='running' and (stage=='development' or stage not in state.get('approvals',{})) else 'false')
         output('task',number)
         output('status',state['status'])
         if state['status']=='blocked' and args.stage!='report':raise SystemExit(1)

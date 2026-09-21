@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "entries": [
     "AGENTS.md",
     "docs/README.md",
@@ -37,30 +37,18 @@
         "reviewing-design-and-plans-cn"
       ]
     },
-    "plan": {
+    "development": {
       "skills": [
-        "managing-engineering-delivery-cn"
-      ],
-      "artifact": "docs/04-implementation/tasks/{task}/implement.md",
-      "instruction": "依据需求与设计，拆成可验收任务，标明依赖、实现范围和真实验证方法。",
-      "inputs": [
-        "docs/04-implementation/tasks/{task}/prd.md",
-        "docs/04-implementation/tasks/{task}/design.md"
-      ],
-      "review_skills": [
-        "reviewing-design-and-plans-cn"
-      ]
-    },
-    "implementation": {
-      "skills": [
+        "managing-engineering-delivery-cn",
         "trellis-before-dev",
         "trellis-check",
         "trellis-update-spec"
       ],
       "artifact": "docs/05-validation/tasks/{task}/validation.md",
-      "instruction": "按确认任务实现代码，运行项目检查，修复失败，并更新实际变化涉及的规范和验证记录。",
+      "instruction": "依据已确认的需求与设计，先拆解可验收任务并按需补充细化设计，再持续实现、测试、整改，更新规范和验证记录。不得擅自改变已确认的需求或设计。",
       "inputs": [
-        "docs/04-implementation/tasks/{task}/implement.md"
+        "docs/04-implementation/tasks/{task}/prd.md",
+        "docs/04-implementation/tasks/{task}/design.md"
       ],
       "review_skills": []
     },

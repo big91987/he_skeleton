@@ -1,23 +1,22 @@
-# Stage-configured native Agent execution
-
-The accepted correction is to preserve native Skill progressive disclosure, constrain available Skills per stage, and resume the working Session using incremental input. Do not copy SKILL.md bodies into model prompts.
+# Three-stage execution
 
 ```mermaid
 flowchart TD
-    W[Workflow selects stage] --> C[Read stage instruction, Skills and artifact contract]
-    C --> N[Native Codex catalog: enable allowed paths and verify]
-    N --> S{Existing working Session?}
-    S -->|No| F[Task context + stage instruction]
-    S -->|Yes| D[New answer, feedback or stage change]
-    F --> A[Codex exec]
-    D --> A2[Codex exec resume]
-    A --> H[Native Stop Hook checks]
-    A2 --> H
-    H -->|Changes required| A2
-    H -->|Passed| P[Checkpoint and advance]
-    H -->|Human decision required| U[Checkpoint and Issue question]
+    E[Entry: restore task and examine materials] --> R[Requirements Agent]
+    R --> RH[Human confirms PRD and AC]
+    RH --> D[Design Agent]
+    D --> DH[Human confirms architecture and contracts]
+    DH --> C[Development Agent: plan and implement]
+    C --> T[Actual checks]
+    T -->|Failure| C
+    T --> V[Independent review]
+    V -->|Code defects| C
+    V -->|Baseline change| R
+    V --> P[Draft PR and evidence]
 ```
 
-`runner.py run_agent()` provides one common execution path for the four authoring stages. It does not implement their business methods. Stage configuration determines the instruction, allowed Skills, input pointers and handoff artifact. Independent entry/review Agents have separate configurable Skill scopes and sessions. `skills.py` adapts native discovery/enablement only; it never parses or injects Skill bodies. `codex.py` owns the CLI call and native Session ID. `stop_hook.py` owns evidence checks and document review before accepting a stage.
+One Workflow exposes entry, requirements, design, development and report. The three business stages use the same Agent adapter with different configured native Skill scopes, input pointers and output contracts. The controller owns human-confirmation state, actual checks and advancement; Skills own the working methods.
 
-See `templates/full/docs/harness-full.md` for configuration and the boundary between current Skill availability and retained Session history.
+Requirements and design always stop for explicit, revision-bound human confirmation, including reused materials. Clarification answers and review feedback do not implicitly approve a document. Development owns task breakdown, implementation, verification, independent review, automatic repair and delivery as internal steps. It only stops early for a missing human decision, baseline reapproval, environmental blockage or bounded failure.
+
+Native Session persistence and progressive Skill loading are described in `templates/full/docs/harness-full.md`, including the pilot's fixed-Runner/fixed-baseline constraints.

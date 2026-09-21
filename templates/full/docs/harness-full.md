@@ -1,63 +1,58 @@
-# Independent full development workflow
+# Full development workflow: three stages
 
-This profile adds `harness-full.yml` and `full_harness/`. The existing `harness.yml`, `harness/loop.py`, old task state and `/harness` entry remain independent.
+The independent `harness-full.yml` profile preserves the original `harness.yml`, `harness/loop.py` and `/harness` entry. Do not add the old `harness` label when trying this profile.
 
-## Owner setup
+## First use
 
-1. Install with `python3 scripts/install_full.py <project-repository> --ref <reviewed-commit>` from the toolbox checkout. Commit the resulting changes to the product repository. Do not execute unreviewed tool revisions.
-2. Review `.harness/full.json`: point `entries` at the existing project indexes and stage artifacts at the existing document layout. Templates seed missing files on first installation; upgrades only replace managed `full_harness/` code. Owner-edited workflow, AGENTS and document indexes are preserved.
-3. Configure real verification commands in `checks`, for example `{"name":"tests","argv":["python3","-m","unittest","discover","-s","tests"],"stages":["implementation"]}`. Check programs must write transient evidence under `{evidence}` or ignored runtime directories. Exit 124/125 means environment/timeout; other nonzero results request repairs. A task with no applicable implementation check cannot pass.
-4. Use one trusted, persistent macOS ARM64 self-hosted Runner with the unique `he-full` label, Python 3.11+, Git, authenticated Codex CLI supporting native Stop hooks, and `gh`. Set repository variable `FULL_STATE_ROOT` to a private absolute directory outside every checkout. Never expose this Runner to forks or untrusted users. The template only admits repository Owner events; this is deliberately a single trusted-Owner pilot.
-5. Allow the workflow token to create draft PRs if organizational policy permits. Otherwise delivery stops with the branch retained; it does not silently change repository permissions. Merge remains a human action.
-6. Put the workflow on the default branch to enable Issue events and workflow dispatch. A branch used for manual execution must contain the reviewed toolkit and project checks. Checkout is pinned to the event SHA.
+1. Install from a reviewed toolbox commit with `python3 scripts/install_full.py <project-repository> --ref <reviewed-commit>`. Review and commit the resulting files. The new Workflow must be on the default branch for Issue commands to work.
+2. Configure one trusted persistent macOS ARM64 Runner with the unique `he-full` label, Python 3.11+, Git, authenticated Codex CLI 0.151.0-compatible native Skills, Stop hooks and exec resume, and `gh`. Set `FULL_STATE_ROOT` outside every checkout. The pilot accepts only repository Owner commands, never fork checkouts.
+3. Configure `.harness/full.json` with project entry documents, stage instructions, allowed Skills, handoff artifacts and real check commands. An empty check list cannot pass development. Browser projects may need a Runner-specific `NODE_PATH`; non-web projects use their own actual checks.
+4. Create a blank Issue describing the change and existing materials. Comment `/develop` to start. Alternatively add the `harness-full` label or manually run **Full development workflow** with the existing Issue number. Ordinary Issue creation or comments do not start this profile.
+5. Read the Issue status card. Answer clarifications using its exact `/develop <token> <answer>` command. A clarification answer is not approval of the resulting document.
+6. When the card says it awaits approval, review its expanded documents/data contracts or download the Actions artifact. Copy `/develop <token> approve` to approve that exact revision. To request edits, use `/develop <token> <specific changes>` instead. Repeat this for requirements and design.
+7. After design approval, development runs implementation, checks, independent review and repairs automatically, then creates a draft PR. Review and merge the product PR manually. If repository policy disallows Actions-created PRs, delivery reports the restriction and retains its branch; it does not change repository settings.
 
-## Entry and stages
+## What Actions shows
 
-An ordinary Issue does not start execution. Owner sends `/develop`, explicitly adds `harness-full`, or selects **Full development workflow → Run workflow** with an existing Issue number. PR numbers and forks are not accepted as execution checkouts; include PR/code references in an Issue. Existing code must be in the selected same-repository execution branch.
+Five Jobs: **entry → requirements → design → development → report**. The three middle Jobs are the business stages; entry restores/routes the task, report publishes status and downloadable material. Completed earlier Jobs are skipped in later runs. The requirement and design Jobs end normally while awaiting a person: a green Job does not mean the entire task has shipped.
 
-Visible jobs: entry → requirements → design → plan → implementation → verification → review → delivery, followed by report. The read-only model in `full_harness/router.py` assesses the actual task and project materials first. Each authoring stage is marked run, reuse, or not_applicable with reasons and evidence paths. Reuse requires existing material, not just a user's claim. Requirements may be supplied directly by a sufficiently explicit Issue; small changes need not manufacture separate design and planning documents. An existing prototype does not imply that its backend is implemented.
+| Stage | Work | Completion condition |
+| --- | --- | --- |
+| requirements | Clarification as needed, scope, complete user journeys, PRD and AC | Human confirms the exact documents |
+| design | Necessary architecture, interfaces, data contracts, compatibility and migration | Human confirms the exact documents |
+| development | Task breakdown, implementation, actual checks, independent review and bounded repairs | Checks and independent review pass; PR delivered for final human review |
 
-The entry job emits run flags, and the workflow conditions actually skip unnecessary jobs. Skipped predecessors do not prevent later jobs from running. The Issue card shows the assessment and its evidence. Existing code can enter verification directly; configured checks and independent review cannot be skipped by the classifier. Failing supplied code enters the bounded implementation repair loop automatically. If verified existing code requires no changes, the workflow reports its verification result without manufacturing a commit or PR.
+Documents already supplied can be reused. Entry assessment cannot approve them on behalf of a person. A design-not-applicable decision is also shown for confirmation. Existing code still undergoes real verification and independent review. Task breakdown and detailed implementation design are development activities, not separate human gates.
 
-Entry ambiguity pauses at entry for a version-bound reply. Human feedback after delivery is assessed again because it may change an earlier requirement or design. The initial inference backend is the existing Codex adapter in read-only mode; Jev has been researched as a future focused decision backend, but is not connected or API-tested.
+Each confirmation records hashes for every declared/reused artifact, including data contracts. Stale tokens and changed documents cannot use the old confirmation. A development change to an approved baseline invalidates the affected stage and later approvals, returns to that stage, and asks for confirmation again. Reviewers can request the same return. Tests and ordinary code-review defects instead return automatically to development.
 
-The stage Agent decides whether clarification is necessary. The Issue card shows its question and a version-bound reply such as `/develop abc1234567 我的回答`. Reply tokens prevent an old reply from satisfying a newer question. Only the Owner can resume. Do not edit the original Issue baseline mid-task; add clarifications through the version-bound reply. After a draft PR is delivered, version-bound feedback on the same Issue resumes implementation in the same Session, reruns acceptance, and updates the existing PR without force-pushing. After that PR is merged or closed, a new task is a new Issue.
+## Agent configuration and native Skills
 
-`needs_input` pauses normally, not as a false delivery success. `blocked` fails the Job with a reason. Checks feed repair instructions through native Codex Stop hooks within the same Session. Requirements/design/plan get independent document reviews; implementation passes configured checks, then a separate reviewer session evaluates the result. Review findings automatically return to the affected stage, invalidate later stage records, and rerun dependent work within bounded attempts. These returns appear in the task history, not as dynamically added GitHub jobs.
+`runner.py` selects the stage and uses one `run_agent()` path. `codex.py` configures native Skills and starts/resumes the working Session. `stop_hook.py` runs checks before accepting completion. `development()` drives the check/review/delivery loop within the single visible development Job.
 
-## Documents and memory
+Configuration version 2 defines requirements, design and development plus read-only entry/review roles:
 
-AGENTS → project index → accepted project facts and contracts → task PRD/AC/design/plan → validation evidence is the shared knowledge path. Existing MaaS-style paths can be mapped in configuration. Skills and their references are pinned in `full_harness/skills`. The runtime exposes them through native Codex discovery and disables paths outside the current stage allowlist. It never appends Skill bodies to prompts. Platform-specific Skills apply only to platform work. The small `.trellis/scripts/get_context.py` is a spec-index helper, not a complete Trellis installation.
+- `instruction`: stage objective; a native `$skill-name` mention explicitly selects a Skill, including one whose policy forbids implicit invocation.
+- `skills`: the allowed toolbox Skill directories for that Agent call; does not inject their bodies.
+- `inputs`: project-relative material pointers, with `{task}` for the Issue number. Existing route evidence can replace missing template documents.
+- `artifact`: primary handoff artifact. Agent-declared additional artifacts are included in confirmation and downloads when they are supported text formats.
+- `review_skills`: independent document reviewer's allowed Skills.
+- `checks`: actual command argument arrays, applying to development by default. Use `{evidence}` for transient output. Codes 124/125 mean environmental blockage; other failures request repair.
 
-One Issue in one execution branch owns a native builder Session; clarification, phases and repairs resume that Session ID. Reviewers use independent Sessions. Runtime state, original prompts, agent output and native Codex session files remain under `FULL_STATE_ROOT/<repository-and-branch-scope>/<issue>/`. These private files are never uploaded. AGENTS, project facts, decisions and task artifacts are durable Git documents. Actions artifacts contain only declared Markdown handoff documents and the public stage card; they are downloadable evidence, not the session database.
+Native `skills/list` is used locally to discover enabled paths, disable paths outside the allowlist, and verify the result before calling the model. These discovery subprocesses exit; there is no additional permanent service. Bundled Skills and same-name project/personal shadows are not implicitly admitted. Unsupported native behavior blocks execution.
 
-The Issue card includes expandable Markdown stage documents (up to 5,000 characters each) and links to the Actions run; each stage uploads a named download package and a step summary. Delivery creates a draft PR with the documents and product code. There is no mandatory website or Pages publish step. Product-specific screenshots or live previews can be added by the Owner; this profile does not yet embed them in the Issue.
+Skills retain their original files and references. The runtime never appends Skill bodies to prompts. The first working call receives task context; subsequent calls send changed instructions, answers, feedback or stage policy. Explicit native Skill mentions deliberately select those particular Skills. Catalog scope is not filesystem isolation and cannot erase prior native Session history.
 
-## Recovery and limits
+## State, artifacts and recovery
 
-This version requires the same physical Runner and retained state directory. Back up that private directory using the organization's secret-handling policy. Moving state between machines, shared cloud storage and concurrent task workers are not implemented. A changed execution revision or edited initial Issue blocks automatic continuation to avoid silently resuming against a different baseline. Retained uncommitted work must be reviewed and reconciled explicitly.
+One repository/branch/Issue owns a persistent working Session and workspace under `FULL_STATE_ROOT`. Entry and independent reviewers use separate read-only Sessions. Stop Hook repair continues the working Session. Waiting for a human ends the current process; their version-bound reply starts a new Actions run and resumes the retained Session. No process stays idle waiting for a person.
 
-Initial runtime rejects project `.codex` configuration instead of trusting arbitrary hooks. Managed controls are checked for changes, but this is not a hostile-code security boundary: use an isolated Runner OS account and trusted project code. The Agent must not change Owner controls to make checks pass. Timeouts, invalid JSON, missing hooks, changed snapshots and review failures fail closed. Verification only establishes the configured checks and reviewed scope; it is not a production-readiness guarantee.
+Private Session files, prompts and runtime logs remain local. Shared requirements, design, decisions and implementation evidence belong in Git. Issue cards show up to 5,000 characters per declared text document; Actions artifacts provide downloadable copies for 30 days. These copies are not the Session database. No website or Pages publication is required.
 
-The pilot imports regular files only, with limits of 3,000 files, 2 MB per file and 60 MB total, excluding dependencies and runtime caches. Symlinks and credential-like files fail closed. Repositories beyond these limits need an explicit import policy before using this profile. GitHub concurrency serializes runs but is not a FIFO task queue: wait for the current command to finish before sending another; a superseded pending run must be submitted again.
+This pilot requires the same physical Runner and a fixed execution baseline. If the base branch advances, reconcile the retained task before starting against the new revision. Editing the initial Issue baseline mid-task also blocks; send changes as version-bound replies. After the delivery PR is merged/closed, start a new Issue for further work. GitHub concurrency is not a FIFO task queue; wait for the current command to finish before sending another.
 
+The importer rejects symlinks and credential-like files, and caps 3,000 files, 2 MB per file, 60 MB total. Project `.codex` configuration needs review before use. Owner controls cannot be weakened by the working Agent. This is a trusted-project pilot, not hostile-code isolation, cloud persistence or a production-readiness guarantee.
 
-## Agent execution and stage policy
+## Toolbox upgrades
 
-The Workflow selects a stage; `runner.py run_agent()` resumes the same working Agent with that stage's configuration. It is a common call/checkpoint/gate function, not another Agent or a separate work-stage workflow. Requirements, design, plan and implementation differ through `.harness/full.json`:
-
-- `instruction`: this stage's objective; use a native `$skill-name` mention when explicitly selecting a Skill, especially one with `allow_implicit_invocation: false`.
-- `skills`: the complete allowed toolbox Skill directory list for this Agent call. This makes Skills available; it does not eagerly invoke them all.
-- `inputs`: repository-relative material pointers (`{task}` expands to the Issue number). Reused material referenced by routing can replace absent template documents; these paths are pointers, not mandatory file-existence gates.
-- `artifact`: expected handoff record.
-- `review_skills`: the separate document reviewer's allowed Skill list. Its scope is not inherited from the working Agent.
-
-Entry assessment and final review also have configurable `instruction` and `skills`. Checks remain explicit executable commands and are selected by their stage setting. The scheduler, actual checks, snapshot validation and delivery stay controller responsibilities; the Skills supply the Agent's working method.
-
-`codex.py` calls native `skills/list` locally (no model call) to discover the installed runtime's catalog, writes `skills.config` path enable/disable entries into the task's generated config, then verifies the effective enabled paths match the allowlist. Bundled system Skills are disabled for these task calls. The same-name Skill in a repository or personal directory is not treated as the configured toolbox Skill. A failed or unsupported discovery/allowlist check blocks execution. `skills.json` records metadata and effective paths privately. Do not set `skip_host_skill_discovery=true`: task Skills must use native discovery.
-
-Codex exposes Skill metadata and loads selected instructions/references progressively. A native `$skill-name` mention intentionally loads that selected Skill; an allowed list alone does not inject every Skill. Explicit-only Skills need an explicit mention in the stage instruction. Keep all supporting files alongside their Skill. Catalog restrictions are not filesystem isolation, and switching stages cannot erase instructions already read into the native Session's history. The new stage instruction replaces the previous working objective.
-
-The first working turn receives the task and project pointers. A resumed turn receives changed answers, feedback, outcomes or stage policy, not the original Issue and every Skill body again. Input checkpoints are trusted for deduplication only after a completed native turn; interrupted calls may conservatively receive context again. Native Stop Hook repairs remain inside the running Codex turn.
-
-This path is tested against Codex CLI 0.151.0 and requires its `app-server skills/list`, path-based Skill enable/disable, bundled-Skill setting, exec resume and native Stop Hook support. It does not add an always-on app-server service: discovery subprocesses exit before model execution.
+Managed `full_harness/` updates come from a pinned toolbox commit. Owner-edited Workflow, stage configuration, AGENTS and project indexes are preserved. Adoption of the five-Job template is explicit; upgrading only runtime code does not rewrite an Owner Workflow. Version-1 nine-Job configuration can be normalized to the three authoring stages, but old active sessions and old Workflow entry commands are not silently migrated.

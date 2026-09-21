@@ -17,7 +17,7 @@ RESULT_SCHEMA = {'type':'object','additionalProperties':False,'properties':{
 REVIEW_SCHEMA = {'type':'object','additionalProperties':False,'properties':{
     'status':{'type':'string','enum':['passed','changes','needs_input','blocked']},
     'summary':{'type':'string'},'question':{'type':'string'},
-    'return_stage':{'type':'string','enum':['requirements','design','plan','implementation']},
+    'return_stage':{'type':'string','enum':['requirements','design','development']},
     'findings':{'type':'array','items':{'type':'string'}}},
     'required':['status','summary','question','return_stage','findings']}
 
@@ -94,6 +94,6 @@ def invoke(source, workspace, session_dir, prompt, evidence, session_id=None, ho
     array_key = 'findings' if review else 'artifacts'
     if not isinstance(result[array_key],list) or not all(isinstance(x,str) for x in result[array_key]):
         raise ValueError('Invalid result array')
-    if review and result['return_stage'] not in ['requirements','design','plan','implementation']:
+    if review and result['return_stage'] not in ['requirements','design','development']:
         raise ValueError('Invalid review return stage')
     return result,ids[0]

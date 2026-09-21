@@ -21,10 +21,10 @@ class FullWorkflowTests(unittest.TestCase):
         (self.work/'AGENTS.md').write_text('Immutable Owner rules')
         (self.work/'validation.md').write_text('Actual validation scope and evidence. '*10)
         self.cfg={'max_attempts':2,'agent_timeout':60,'check_timeout':5,'review_timeout':10,
-                  'entries':['AGENTS.md'],'stages':{s:{'skills':[],'artifact':'validation.md'} for s in runner.STAGES[:4]},
+                  'entries':['AGENTS.md'],'stages':{s:{'skills':[],'artifact':'validation.md'} for s in runner.STAGES[:3]},
                   'checks':[{'name':'real assertion','argv':[sys.executable,'-c','from pathlib import Path; assert Path("fixed").exists()']}]}
         self.context={'workspace':str(self.work),'evidence':str(self.evidence),'source':str(self.root),'session':str(self.root),
-                      'controls':controls(self.work),'stage':'implementation','config':self.cfg,
+                      'controls':controls(self.work),'stage':'development','config':self.cfg,
                       'task':{'number':1},'deadline_monotonic':time.monotonic()+60}
         self.cp=self.root/'context.json';write_json(self.cp,self.context)
         self.ready={'last_assistant_message':json.dumps({'status':'ready','summary':'done','question':'','artifacts':['validation.md']})}
@@ -86,21 +86,21 @@ class FullWorkflowTests(unittest.TestCase):
 
     def test_missing_hook_gate_never_passes(self):
         state={'config':self.cfg,'task':{'number':1},'turn':0,'controls':controls(self.work),'baseline':'sha','history':[],
-               'completed':{},'status':'running','stage':'implementation'}
+               'completed':{},'status':'running','stage':'development'}
         with patch.object(runner,'agent_input',return_value=('task',{})),patch.object(runner,'invoke',return_value=({'status':'ready','summary':'claimed','question':'','artifacts':[]},'builder')):
-            runner.run_agent(self.root,self.root,state,'implementation')
+            runner.run_agent(self.root,self.root,state,'development')
         self.assertEqual(state['status'],'blocked');self.assertEqual(state['completed'],{})
 
     def test_independent_review_returns_to_affected_stage(self):
-        state={'config':self.cfg,'task':{'number':1},'turn':0,'baseline':'sha','history':[],'completed':{'implementation':{}},'status':'running','stage':'review'}
+        state={'config':self.cfg,'task':{'number':1},'turn':0,'baseline':'sha','history':[],'completed':{'development':{}},'status':'running','stage':'review'}
         calls=[]
         def repair(source,session,s,stage):
             calls.append(stage);s['completed'][stage]={'checks':[]};s['stage']=runner.STAGES[runner.STAGES.index(stage)+1]
         outcomes=[({'status':'changes','summary':'fix interface','question':'','return_stage':'design','findings':['contract missing']},'review1'),
-                  ({'status':'passed','summary':'verified','question':'','return_stage':'implementation','findings':[]},'review2')]
+                  ({'status':'passed','summary':'verified','question':'','return_stage':'development','findings':[]},'review2')]
         with patch.object(runner,'review_prompt',return_value='review'),patch.object(runner,'invoke',side_effect=outcomes),patch.object(runner,'run_agent',side_effect=repair),patch.object(runner,'verify_stage'):
             runner.review_stage(self.root,self.root,state)
-        self.assertEqual(calls,['design','plan','implementation']);self.assertEqual(state['stage'],'delivery')
+        self.assertEqual(calls,['design','development']);self.assertEqual(state['stage'],'delivery')
 
     def test_install_and_upgrade_preserve_owner_files(self):
         (self.work/'.git').mkdir()
@@ -145,10 +145,10 @@ class FullWorkflowTests(unittest.TestCase):
 
     def test_human_pr_feedback_invalidates_acceptance_and_resumes_implementation(self):
         state={'runner':'machine','baseline':'sha','status':'waiting_review','reply_token':'reply',
-               'stage':'delivery','completed':{'requirements':{},'design':{},'plan':{},'implementation':{},'review':{},'delivery':{}}}
+               'stage':'delivery','completed':{'requirements':{},'design':{},'development':{},'review':{},'delivery':{}}}
         runner.begin(state,'reply fix empty results','sha','machine','next-run')
-        self.assertEqual(state['stage'],'entry')
-        self.assertEqual(set(state['completed']),{'requirements','design','plan'})
+        self.assertEqual(state['stage'],'development')
+        self.assertEqual(set(state['completed']),{'requirements','design'})
         self.assertEqual(state['instruction'],'fix empty results')
 
     def test_cancelled_call_recovers_native_session_mapping(self):

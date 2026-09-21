@@ -3,6 +3,7 @@
 Independent document reviews run here; code acceptance has a visible review Job.
 """
 import json
+import hashlib
 import os
 from pathlib import Path
 import sys
@@ -38,6 +39,11 @@ def evaluate(context_path, payload):
     if controls(root)!=c['controls']:
         gate.update(status='blocked',reason='任务修改了受保护的执行配置或规则')
         write_json(gate_path,gate);return {}
+    for name,expected in c.get('approved_files',{}).items():
+        path=relative_file(root,name)
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=expected:
+            write_json(gate_path,{'status':'needs_input','reason':'已确认产物发生变化，需重新进入人工确认：'+name})
+            return {}
     try: result=json.loads(payload.get('last_assistant_message') or '{}')
     except ValueError:result={}
     if result.get('status') in {'needs_input','blocked'}:
@@ -56,11 +62,11 @@ def evaluate(context_path, payload):
     for name in result.get('artifacts',[]):
         if not relative_file(root,name).is_file():errors.append('声明的产物不存在：'+name)
     before=digest(root)
-    if c['stage']=='implementation' and not any(set(x.get('stages',['implementation'])) & {'implementation','verification'} for x in c['config'].get('checks',[])):
+    if c['stage']=='development' and not any(set(x.get('stages',['development'])) & {'development','verification'} for x in c['config'].get('checks',[])):
         gate.update(status='blocked',reason='项目尚未配置任何实现验证入口；请 Owner 在 full.json 配置，不能由实现者降低标准')
         write_json(gate_path,gate);return {}
     for idx,check in enumerate(c['config'].get('checks',[])):
-        if c['stage'] not in check.get('stages',['implementation']) and not (c['stage']=='implementation' and 'verification' in check.get('stages',[])):continue
+        if c['stage'] not in check.get('stages',['development']) and not (c['stage']=='development' and 'verification' in check.get('stages',[])):continue
         log=evidence/f'check-{gate["attempts"]}-{idx}.log'
         # Configuration originates in the fixed execution snapshot, not Agent edits.
         argv=[x.replace('{workspace}',str(root)).replace('{evidence}',str(evidence)) for x in check['argv']]
@@ -76,7 +82,7 @@ def evaluate(context_path, payload):
             write_json(gate_path,gate);return {}
         if code:errors.append(check['name']+' 失败：\n'+log.read_text()[-6000:])
     if before!=digest(root):errors.append('验证执行期间项目文件变化，须核对后重验')
-    if not errors and c['stage'] in {'requirements','design','plan'}:
+    if not errors and c['stage'] in {'requirements','design'}:
         c['check_results']=check_results
         review,review_id=invoke(Path(c['source']),root,Path(c['session']),review_prompt(Path(c['source']),root,c,c['stage']),
                                 evidence/f'review-{gate["attempts"]}',review=True,timeout_override=c['config']['review_timeout'],

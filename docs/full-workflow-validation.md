@@ -45,3 +45,10 @@ A live three-call synthetic task verified progressive disclosure and native Sess
 The native Stop Hook regression again rejected a deliberately premature completion, repaired the missing file in the same Session, and passed the unchanged check on attempt two. Offline regressions cover incremental answers, stage-policy changes, interrupted-input fallback, and preventing author Skill commands from becoming reviewer/router instructions.
 
 Reproduce the new live probe with `python3 tests/integration_skills.py --run-live`. It sends only generated synthetic Skill fixtures to the configured Codex service and requires authenticated model access. Stage Skill scopes restrict native availability; they are not filesystem permissions and cannot erase prior Session history. The full GitHub delivery and Jev limitations above still apply.
+
+
+## Three-stage pilot update
+
+The visible Workflow now has five Jobs: entry, requirements, design, development, report. Requirements and design have explicit revision-bound human confirmation. Reused artifacts still require confirmation. Development includes task planning, implementation, actual checks, independent review, repair and PR delivery internally.
+
+The current 73-test regression suite passes and adds approval-token, artifact-hash, clarification/approval separation, missing-approval, reused-material, extra-contract download, review-return and blocked-delivery recovery tests. These are deterministic controller/API tests; they do not constitute a live GitHub three-stage run. Earlier native Session/Skill/Hook evidence remains scoped to those exercised mechanisms. The updated full Workflow still needs default-branch installation and a live Issue run.
