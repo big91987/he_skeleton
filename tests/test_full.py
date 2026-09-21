@@ -87,8 +87,8 @@ class FullWorkflowTests(unittest.TestCase):
     def test_missing_hook_gate_never_passes(self):
         state={'config':self.cfg,'task':{'number':1},'turn':0,'controls':controls(self.work),'baseline':'sha','history':[],
                'completed':{},'status':'running','stage':'implementation'}
-        with patch.object(runner,'prompt_for',return_value='task'),patch.object(runner,'invoke',return_value=({'status':'ready','summary':'claimed','question':'','artifacts':[]},'builder')):
-            runner.work_stage(self.root,self.root,state,'implementation')
+        with patch.object(runner,'agent_input',return_value=('task',{})),patch.object(runner,'invoke',return_value=({'status':'ready','summary':'claimed','question':'','artifacts':[]},'builder')):
+            runner.run_agent(self.root,self.root,state,'implementation')
         self.assertEqual(state['status'],'blocked');self.assertEqual(state['completed'],{})
 
     def test_independent_review_returns_to_affected_stage(self):
@@ -98,7 +98,7 @@ class FullWorkflowTests(unittest.TestCase):
             calls.append(stage);s['completed'][stage]={'checks':[]};s['stage']=runner.STAGES[runner.STAGES.index(stage)+1]
         outcomes=[({'status':'changes','summary':'fix interface','question':'','return_stage':'design','findings':['contract missing']},'review1'),
                   ({'status':'passed','summary':'verified','question':'','return_stage':'implementation','findings':[]},'review2')]
-        with patch.object(runner,'review_prompt',return_value='review'),patch.object(runner,'invoke',side_effect=outcomes),patch.object(runner,'work_stage',side_effect=repair),patch.object(runner,'verify_stage'):
+        with patch.object(runner,'review_prompt',return_value='review'),patch.object(runner,'invoke',side_effect=outcomes),patch.object(runner,'run_agent',side_effect=repair),patch.object(runner,'verify_stage'):
             runner.review_stage(self.root,self.root,state)
         self.assertEqual(calls,['design','plan','implementation']);self.assertEqual(state['stage'],'delivery')
 

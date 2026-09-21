@@ -92,24 +92,41 @@ def pause(state,status,reason):
     state.update(status=status,reason=reason,reply_token=uuid.uuid4().hex[:10])
 
 
-def prompt_for(source,state,stage):
+def agent_input(state, stage, session):
+    """First call gets task context; resume gets changed facts and current stage only."""
     cfg=state['config'];spec=cfg['stages'][stage]
-    skills=[]
-    for name in spec['skills']:
-        p=source/'full_harness/skills'/name/'SKILL.md'
-        skills.append('Skill 原位置（相对引用从此解析）：'+str(p)+'\n'+p.read_text())
-    artifact=spec['artifact'].replace('{task}',str(state['task']['number']))
     packet={'task':state['task'],'stage':stage,'instruction':state.get('instruction',''),
             'project_entries':cfg['entries'],'completed':state['completed'],'routing':state.get('routing'),
-            'handoff_artifact':artifact,'checks':cfg.get('checks',[]),'feedback':state.get('feedback','')}
-    return ('你在持久化的项目任务会话里工作。本次只交付指定阶段。先阅读项目入口和引用的现状、约束与实际代码，再执行适用 Skill。\n'
-        '已有 PRD、原型或代码可以直接复用，用本阶段交接记录说明来源、适用范围和缺口，不机械重写。'
-        '需求阶段澄清目标、用户完整主线及 AC；设计阶段覆盖必要接口/数据/迁移/兼容与取舍；规划阶段拆可验收任务；实现阶段逐项实现并真实验证。'
-        '低风险小改允许简短文档；平台专用 Skill 只在平台项目适用。需要用户做产品或架构决定时返回 needs_input 和清晰问题；可自行消除的问题继续做。'
-        '不得虚构用户决定、凭直接改数据库/伪造数据证明产品入口可用。不得修改受保护的执行配置、Skills 或 AGENTS.md。'
-        '把可共享决策和现状更新到项目文档，私有对话不能作为其他任务的唯一知识来源。'
-        '阶段达到可交接状态后返回 ready；环境确实无法推进返回 blocked。Stop Hook 会检查并把失败反馈到本会话，ready 本身不代表通过。\n'
-        +json.dumps(packet,ensure_ascii=False,indent=2)+'\n\n'+'\n\n'.join(skills))
+            'stage_instruction':spec.get('instruction','完成当前阶段并留下可检查的交接产物。'),
+            'inputs':[x.replace('{task}',str(state['task']['number'])) for x in spec.get('inputs',[])],
+            'allowed_skills':spec['skills'],
+            'handoff_artifact':spec['artifact'].replace('{task}',str(state['task']['number'])),
+            'checks':cfg.get('checks',[]),'feedback':state.get('feedback','')}
+    previous=None
+    # Only suppress prior input after a completed native turn. An interrupted/preflight-only call may not have delivered it.
+    for path in sorted((session/'turns').glob('*/agent/input.json'),key=lambda p:int(p.parents[1].name),reverse=True):
+        log=path.parent/'agent.jsonl'
+        if not log.exists():continue
+        for line in log.read_text().splitlines():
+            try:event=json.loads(line)
+            except ValueError:continue
+            if event.get('type')=='turn.completed':
+                previous=read_json(path);break
+        if previous is not None:break
+    if previous is None:
+        message=('先阅读项目入口和实际材料。按本阶段目标执行；可复用已有产物，低风险任务保持简短。'
+            'Skill 由 Codex 原生目录提供，按适用范围选择本阶段 Skills，需要时再读取正文与引用，不必全部加载。'
+            '缺少用户产品或架构决定时返回 needs_input；环境无法推进返回 blocked；完成本阶段返回 ready，由检查决定是否通过。'
+            '不得伪造验证、绕过产品入口或修改受保护执行规则。把公共决定写入项目文档。\n')
+        content=packet
+    else:
+        content={k:v for k,v in packet.items() if previous.get(k)!=v}
+        content['stage']=stage
+        # Repeat a response even when identical to the previous answer; it is a new user event.
+        content['instruction']=packet['instruction']
+        message=('继续当前原生会话。以下是本轮新增或变化的信息；其余沿用此前上下文。'
+                 '仅在本轮原生 Skill 目录允许范围内选择适用 Skill，旧阶段 Skill 不再作为本阶段指令。\n')
+    return message+json.dumps(content,ensure_ascii=False,indent=2),packet
 
 
 def checkpoint(session,state):
@@ -191,7 +208,7 @@ def verify_stage(source,session,state,attempt=0):
                 state['completed'].pop('implementation',None)
                 # Real check failure goes into the existing bounded implementation
                 # loop, not back to the human just because code was supplied.
-                work_stage(source,session,state,'implementation')
+                run_agent(source,session,state,'implementation')
                 if state['status']!='running':return
                 # A verification-only failing check must also be included in the
                 # implementation gate, so repaired code is checked before return.
@@ -201,19 +218,25 @@ def verify_stage(source,session,state,attempt=0):
     state['stage']='review'
 
 
-def work_stage(source,session,state,stage):
+def run_agent(source,session,state,stage):
     workspace=session/'workspace';state['turn']+=1
     state['stage']=stage
     checkpoint(session,state)
     print('Executing stage: '+stage,flush=True)
     evidence=session/'turns'/str(state['turn']);evidence.mkdir(parents=True)
     context={'source':str(source),'workspace':str(workspace),'session':str(session),'evidence':str(evidence),
-             'task':state['task'],'instruction':state.get('instruction',''),'stage':stage,'config':state['config'],
+             'task':state['task'],'instruction':state.get('instruction',''),'routing':state.get('routing'),'stage':stage,'config':state['config'],
              'controls':state['controls'],'baseline':state['baseline'],
              'deadline_monotonic':time.monotonic()+state['config']['agent_timeout'],'node_path':os.environ.get('NODE_PATH','')}
     write_json(evidence/'context.json',context)
     sid=recover_session(session)
-    result,sid=invoke(source,workspace,session,prompt_for(source,state,stage),evidence/'agent',sid,evidence/'context.json')
+    prompt,packet=agent_input(state,stage,session)
+    try:
+        result,sid=invoke(source,workspace,session,prompt,evidence/'agent',sid,evidence/'context.json',
+                          skills=state['config']['stages'][stage]['skills'])
+    finally:
+        # Preserve the compact input checkpoint even if a started native turn is interrupted.
+        if (evidence/'agent').exists():write_json(evidence/'agent/input.json',packet)
     gate=read_json(evidence/'gate.json') if (evidence/'gate.json').exists() else {'status':'blocked','reason':'Native Stop Hook did not supply a verified gate'}
     state['history'].append({'stage':stage,'turn':state['turn'],'session_id':sid,'agent':result['status'],'gate':gate['status']})
     if result['status']!='ready':
@@ -243,7 +266,8 @@ def review_stage(source,session,state):
         context={'task':state['task'],'config':state['config'],'baseline':state['baseline'],
                  'instruction':state.get('instruction',''),'routing':state.get('routing'),'check_results':state['completed'].get('verification',{}).get('checks',[])}
         before=digest(workspace)
-        result,sid=invoke(source,workspace,session,review_prompt(source,workspace,context,'review'),evidence,review=True,timeout_override=state['config']['review_timeout'])
+        result,sid=invoke(source,workspace,session,review_prompt(source,workspace,context,'review'),evidence,review=True,timeout_override=state['config']['review_timeout'],
+                          skills=state['config']['stages'].get('review',{}).get('skills',['trellis-check']))
         state['history'].append({'stage':'review','turn':state['turn'],'session_id':sid,'gate':result['status']})
         if before!=digest(workspace):pause(state,'blocked','Workspace changed during independent review');return
         if result['status']=='passed':
@@ -256,7 +280,7 @@ def review_stage(source,session,state):
         for stage in STAGES[start:]:state['completed'].pop(stage,None)
         state['stage']=STAGES[start]
         for stage in STAGES[start:4]:
-            work_stage(source,session,state,stage)
+            run_agent(source,session,state,stage)
             if state['status']!='running':return
         verify_stage(source,session,state)
         if state['status']!='running':return
@@ -384,7 +408,7 @@ def main():
             if args.stage=='entry' and state['status']=='running' and state['stage']=='entry':
                 assess_entry(source,session,state)
             if state['status']=='running' and args.stage==state['stage']:
-                if args.stage in STAGES[:4]:work_stage(source,session,state,args.stage)
+                if args.stage in STAGES[:4]:run_agent(source,session,state,args.stage)
                 elif args.stage=='verification':verify_stage(source,session,state)
                 elif args.stage=='review':review_stage(source,session,state)
                 elif args.stage=='delivery':deliver(session,state)

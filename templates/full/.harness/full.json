@@ -6,24 +6,50 @@
     "docs/00-global/project.md"
   ],
   "stages": {
+    "entry": {
+      "instruction": "读取实际需求、文档和代码，判断阶段缺口和可复用依据；不能批准跳过验证或评审。",
+      "skills": []
+    },
     "requirements": {
       "skills": [
         "resumable-batch-grilling",
         "defining-platform-products-cn"
       ],
-      "artifact": "docs/04-implementation/tasks/{task}/prd.md"
+      "artifact": "docs/04-implementation/tasks/{task}/prd.md",
+      "instruction": "明确本次目标、范围、用户完整主线和验收标准。仅在缺少用户决策时澄清；复用已有材料。 使用 $resumable-batch-grilling 管理需要澄清的决策；目标明确时不强制提问。",
+      "inputs": [
+        "docs/00-global/project.md"
+      ],
+      "review_skills": [
+        "reviewing-design-and-plans-cn"
+      ]
     },
     "design": {
       "skills": [
         "platform-architecture-v2-cn"
       ],
-      "artifact": "docs/04-implementation/tasks/{task}/design.md"
+      "artifact": "docs/04-implementation/tasks/{task}/design.md",
+      "instruction": "依据确认的需求和当前实现，完成必要的接口、数据、兼容性与迁移设计，记录取舍。 使用 $platform-architecture-v2-cn 中适用的方法；非平台任务不扩展为平台架构设计。",
+      "inputs": [
+        "docs/04-implementation/tasks/{task}/prd.md"
+      ],
+      "review_skills": [
+        "reviewing-design-and-plans-cn"
+      ]
     },
     "plan": {
       "skills": [
         "managing-engineering-delivery-cn"
       ],
-      "artifact": "docs/04-implementation/tasks/{task}/implement.md"
+      "artifact": "docs/04-implementation/tasks/{task}/implement.md",
+      "instruction": "依据需求与设计，拆成可验收任务，标明依赖、实现范围和真实验证方法。",
+      "inputs": [
+        "docs/04-implementation/tasks/{task}/prd.md",
+        "docs/04-implementation/tasks/{task}/design.md"
+      ],
+      "review_skills": [
+        "reviewing-design-and-plans-cn"
+      ]
     },
     "implementation": {
       "skills": [
@@ -31,7 +57,18 @@
         "trellis-check",
         "trellis-update-spec"
       ],
-      "artifact": "docs/05-validation/tasks/{task}/validation.md"
+      "artifact": "docs/05-validation/tasks/{task}/validation.md",
+      "instruction": "按确认任务实现代码，运行项目检查，修复失败，并更新实际变化涉及的规范和验证记录。",
+      "inputs": [
+        "docs/04-implementation/tasks/{task}/implement.md"
+      ],
+      "review_skills": []
+    },
+    "review": {
+      "instruction": "独立核对需求、设计、代码和验证证据，审查完整用户路径、兼容性与可维护性。",
+      "skills": [
+        "trellis-check"
+      ]
     }
   },
   "checks": [],

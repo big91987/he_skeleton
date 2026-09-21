@@ -4,7 +4,7 @@ Date: 2026-09-21. Runtime: Codex CLI 0.151.0, local macOS Runner profile.
 
 ## Verified
 
-- 55 Python tests passed, including all 27 existing-flow tests. New tests cover actual check failure/retry, protected control changes, missing hooks, absent implementation checks, review rejection, stale replies, owner-only commands, installer ownership, native session recovery after interruption, and idempotent delivery after PR permission failure.
+- 62 Python tests passed, including all 27 existing-flow tests. New tests cover actual check failure/retry, protected control changes, missing hooks, absent implementation checks, review rejection, stale replies, owner-only commands, installer ownership, native session recovery after interruption, and idempotent delivery after PR permission failure.
 - The new Workflow YAML parses with nine named jobs and independent entry events.
 - A real Codex conversation asked two clarification questions and retained both answers and the business name through three calls with one native Session ID.
 - A real native Stop Hook rejected a deliberately premature ready result. The same Session created the missing file, reran the unchanged check, and passed on the second gate attempt.
@@ -34,3 +34,14 @@ Live tests use an already authenticated Codex installation and consume model quo
 Additional offline tests cover idea entry, PRD reuse, existing-code entry, absent or escaping evidence paths, forbidden stage selection, clarification pauses, real verification of supplied code, bounded repair on failure and missing Owner checks. The nine-job YAML has explicit skip-safe dependencies and per-stage flags.
 
 A new live Codex assessment of the retained CLI fixture was not executed: automatic approval review rejected sending those project files to the external model without explicit approval. Earlier live Session, Hook and stage results above do not establish that the new classifier has been live-tested. No Jev API call was made.
+
+
+## Native Skill scope correction
+
+The controller no longer reads Skill bodies into Agent or reviewer prompts. Native Codex discovery/enablement was exercised with the installed CLI 0.151.0, including every configured toolbox stage, an unrelated repository Skill, a same-name repository shadow, stage switching and an empty scope. Effective enabled file paths matched the stage allowlists. The local catalog probe does not call a model.
+
+A live three-call synthetic task verified progressive disclosure and native Session continuity. The first call listed only stage-alpha without reading any Skill body. The second call resumed the same Session, was not told the new Skill name, identified stage-beta from the current catalog, and read its Skill file and reference to return the expected proof while remembering the task name. The third call exercised a native explicit-only Skill. The harness prompts contained no Skill body or reference proof text. This validates the generated fixture, not a whole product delivery.
+
+The native Stop Hook regression again rejected a deliberately premature completion, repaired the missing file in the same Session, and passed the unchanged check on attempt two. Offline regressions cover incremental answers, stage-policy changes, interrupted-input fallback, and preventing author Skill commands from becoming reviewer/router instructions.
+
+Reproduce the new live probe with `python3 tests/integration_skills.py --run-live`. It sends only generated synthetic Skill fixtures to the configured Codex service and requires authenticated model access. Stage Skill scopes restrict native availability; they are not filesystem permissions and cannot erase prior Session history. The full GitHub delivery and Jev limitations above still apply.

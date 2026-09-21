@@ -7,6 +7,7 @@ import sys
 import uuid
 
 from .common import clean_env, read_json, run_process, write_json
+from .skills import configure as configure_skills
 
 RESULT_SCHEMA = {'type':'object','additionalProperties':False,'properties':{
     'status':{'type':'string','enum':['ready','needs_input','blocked']},
@@ -33,7 +34,7 @@ def runtime_home(home):
     return home
 
 
-def invoke(source, workspace, session_dir, prompt, evidence, session_id=None, hook_context=None, review=False, timeout_override=None, schema_override=None):
+def invoke(source, workspace, session_dir, prompt, evidence, session_id=None, hook_context=None, review=False, timeout_override=None, schema_override=None, skills=None):
     if (workspace/'.codex').exists():
         raise ValueError('This initial runtime requires project .codex configuration to be reviewed and removed from the execution workspace before enabling the managed hook')
     evidence.mkdir(parents=True, exist_ok=False)
@@ -44,13 +45,13 @@ def invoke(source, workspace, session_dir, prompt, evidence, session_id=None, ho
     # Project and user config must not add arbitrary hooks. The only hook below is
     # assembled by the controller from its fixed execution revision.
     config = 'approval_policy="never"\nsandbox_mode='+json.dumps('read-only' if review else 'workspace-write')+'\n'
-    config += 'model_provider="harness_http"\n[model_providers.harness_http]\nname="OpenAI HTTPS"\nwire_api="responses"\nrequires_openai_auth=true\nsupports_websockets=false\n[features]\nskip_host_skill_discovery=true\n'
+    config += 'model_provider="harness_http"\n[model_providers.harness_http]\nname="OpenAI HTTPS"\nwire_api="responses"\nrequires_openai_auth=true\nsupports_websockets=false\n'
     if hook_context:
         cmd = shlex.join([sys.executable,str(source/'full_harness/stop_hook.py'),str(hook_context)])
         config += '\n[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype="command"\ncommand='+json.dumps(cmd)+'\ntimeout=600\n'
     if (home/'hooks.json').exists():
         raise ValueError('Unexpected unmanaged hook configuration')
-    (home/'config.toml').write_text(config)
+    configure_skills(home, workspace, source, skills or [], config, evidence)
     argv = ['codex','exec'] + (['resume',session_id] if session_id else [])
     argv += ['--skip-git-repo-check','--json','--output-schema',str(evidence/'schema.json'),
              '--output-last-message',str(evidence/'result.json')]

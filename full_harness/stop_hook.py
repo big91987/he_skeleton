@@ -14,9 +14,12 @@ from full_harness.codex import invoke
 
 
 def review_prompt(source, workspace, context, stage):
-    skill=source/('full_harness/skills/trellis-check/SKILL.md' if stage=='review' else 'full_harness/skills/reviewing-design-and-plans-cn/SKILL.md')
-    return ('你是独立评审者，不能修改项目文件。阅读以下 Skill 全文及所需引用，按其方法审查，而非仅检查文档存在。\n'
-        +skill.read_text()+'\nSkill 原位置：'+str(skill)+'\n'
+    spec=context['config']['stages'].get(stage,{})
+    instruction=spec.get('instruction','') if stage=='review' else '仅评审当前阶段的产物，不执行作者阶段工作。'
+    contracts={name:{'artifact':value.get('artifact'), 'objective':value.get('instruction','').replace('$','')}
+               for name,value in context['config']['stages'].items()}
+    return ('你是独立评审者，不能修改项目文件。按本轮原生 Skill 目录选择适用评审 Skill，按需读取正文和引用。\n'
+        +instruction+'\n'
         '审查依据是实际任务、需求/决策账本、代码、测试、配置和验证证据；不读取实现者私有对话。'
         '检查是否串通基本用户旅程、遗漏前置对象、绕过产品入口、降低验收标准或伪造完成。'
         '检查可维护性、重复实现和架构偏离。验证报告仅证明记录的范围。'
@@ -24,7 +27,7 @@ def review_prompt(source, workspace, context, stage):
         '发现问题返回 changes 和明确 findings、return_stage；缺用户决策返回 needs_input；环境阻塞返回 blocked。'
         '只有本阶段范围真实符合要求才返回 passed；不得要求低风险变更无意义地扩展文档。\n'
         +json.dumps({'stage':stage,'task':context['task'],'instruction':context.get('instruction',''),
-                    'entries':context['config']['entries'],'stages':context['config']['stages'],
+                    'entries':context['config']['entries'],'stage_material_to_review':stage,'stages':contracts,
                     'baseline':context.get('baseline'),'routing':context.get('routing'), 'checks':context.get('check_results',[])},ensure_ascii=False))
 
 
@@ -76,7 +79,8 @@ def evaluate(context_path, payload):
     if not errors and c['stage'] in {'requirements','design','plan'}:
         c['check_results']=check_results
         review,review_id=invoke(Path(c['source']),root,Path(c['session']),review_prompt(Path(c['source']),root,c,c['stage']),
-                                evidence/f'review-{gate["attempts"]}',review=True,timeout_override=c['config']['review_timeout'])
+                                evidence/f'review-{gate["attempts"]}',review=True,timeout_override=c['config']['review_timeout'],
+                                skills=c['config']['stages'][c['stage']].get('review_skills',['reviewing-design-and-plans-cn']))
         write_json(evidence/f'review-{gate["attempts"]}.json',review)
         if before!=digest(root):errors.append('评审期间项目发生变化，评审失效')
         elif review['status']=='changes':errors.extend(review['findings'] or [review['summary']])

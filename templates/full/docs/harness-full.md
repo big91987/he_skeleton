@@ -27,7 +27,7 @@ The stage Agent decides whether clarification is necessary. The Issue card shows
 
 ## Documents and memory
 
-AGENTS → project index → accepted project facts and contracts → task PRD/AC/design/plan → validation evidence is the shared knowledge path. Existing MaaS-style paths can be mapped in configuration. Skill bodies are pinned in `full_harness/skills`; prompts name their original path so references can be read. Platform-specific Skills apply only to platform work. The small `.trellis/scripts/get_context.py` is a spec-index helper, not a complete Trellis installation.
+AGENTS → project index → accepted project facts and contracts → task PRD/AC/design/plan → validation evidence is the shared knowledge path. Existing MaaS-style paths can be mapped in configuration. Skills and their references are pinned in `full_harness/skills`. The runtime exposes them through native Codex discovery and disables paths outside the current stage allowlist. It never appends Skill bodies to prompts. Platform-specific Skills apply only to platform work. The small `.trellis/scripts/get_context.py` is a spec-index helper, not a complete Trellis installation.
 
 One Issue in one execution branch owns a native builder Session; clarification, phases and repairs resume that Session ID. Reviewers use independent Sessions. Runtime state, original prompts, agent output and native Codex session files remain under `FULL_STATE_ROOT/<repository-and-branch-scope>/<issue>/`. These private files are never uploaded. AGENTS, project facts, decisions and task artifacts are durable Git documents. Actions artifacts contain only declared Markdown handoff documents and the public stage card; they are downloadable evidence, not the session database.
 
@@ -40,3 +40,24 @@ This version requires the same physical Runner and retained state directory. Bac
 Initial runtime rejects project `.codex` configuration instead of trusting arbitrary hooks. Managed controls are checked for changes, but this is not a hostile-code security boundary: use an isolated Runner OS account and trusted project code. The Agent must not change Owner controls to make checks pass. Timeouts, invalid JSON, missing hooks, changed snapshots and review failures fail closed. Verification only establishes the configured checks and reviewed scope; it is not a production-readiness guarantee.
 
 The pilot imports regular files only, with limits of 3,000 files, 2 MB per file and 60 MB total, excluding dependencies and runtime caches. Symlinks and credential-like files fail closed. Repositories beyond these limits need an explicit import policy before using this profile. GitHub concurrency serializes runs but is not a FIFO task queue: wait for the current command to finish before sending another; a superseded pending run must be submitted again.
+
+
+## Agent execution and stage policy
+
+The Workflow selects a stage; `runner.py run_agent()` resumes the same working Agent with that stage's configuration. It is a common call/checkpoint/gate function, not another Agent or a separate work-stage workflow. Requirements, design, plan and implementation differ through `.harness/full.json`:
+
+- `instruction`: this stage's objective; use a native `$skill-name` mention when explicitly selecting a Skill, especially one with `allow_implicit_invocation: false`.
+- `skills`: the complete allowed toolbox Skill directory list for this Agent call. This makes Skills available; it does not eagerly invoke them all.
+- `inputs`: repository-relative material pointers (`{task}` expands to the Issue number). Reused material referenced by routing can replace absent template documents; these paths are pointers, not mandatory file-existence gates.
+- `artifact`: expected handoff record.
+- `review_skills`: the separate document reviewer's allowed Skill list. Its scope is not inherited from the working Agent.
+
+Entry assessment and final review also have configurable `instruction` and `skills`. Checks remain explicit executable commands and are selected by their stage setting. The scheduler, actual checks, snapshot validation and delivery stay controller responsibilities; the Skills supply the Agent's working method.
+
+`codex.py` calls native `skills/list` locally (no model call) to discover the installed runtime's catalog, writes `skills.config` path enable/disable entries into the task's generated config, then verifies the effective enabled paths match the allowlist. Bundled system Skills are disabled for these task calls. The same-name Skill in a repository or personal directory is not treated as the configured toolbox Skill. A failed or unsupported discovery/allowlist check blocks execution. `skills.json` records metadata and effective paths privately. Do not set `skip_host_skill_discovery=true`: task Skills must use native discovery.
+
+Codex exposes Skill metadata and loads selected instructions/references progressively. A native `$skill-name` mention intentionally loads that selected Skill; an allowed list alone does not inject every Skill. Explicit-only Skills need an explicit mention in the stage instruction. Keep all supporting files alongside their Skill. Catalog restrictions are not filesystem isolation, and switching stages cannot erase instructions already read into the native Session's history. The new stage instruction replaces the previous working objective.
+
+The first working turn receives the task and project pointers. A resumed turn receives changed answers, feedback, outcomes or stage policy, not the original Issue and every Skill body again. Input checkpoints are trusted for deduplication only after a completed native turn; interrupted calls may conservatively receive context again. Native Stop Hook repairs remain inside the running Codex turn.
+
+This path is tested against Codex CLI 0.151.0 and requires its `app-server skills/list`, path-based Skill enable/disable, bundled-Skill setting, exec resume and native Stop Hook support. It does not add an always-on app-server service: discovery subprocesses exit before model execution.

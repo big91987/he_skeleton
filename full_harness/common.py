@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import subprocess
@@ -92,10 +93,28 @@ def configuration(source):
     for name in value['entries']:
         if not relative_file(source,name).is_file():
             raise ValueError('Project entry missing: '+name)
-    for stage in STAGES[:4]:
-        spec = value['stages'][stage]
-        for name in spec['skills']:
-            relative_file(Path(source)/'full_harness/skills',name+'/SKILL.md').read_text()
+    defaults = {'entry': '读取实际需求、文档和代码，判断阶段缺口和可复用依据；不能批准跳过验证或评审。', 'requirements': '明确本次目标、范围、用户完整主线和验收标准。仅在缺少用户决策时澄清；复用已有材料。 使用 $resumable-batch-grilling 管理需要澄清的决策；目标明确时不强制提问。', 'design': '依据确认的需求和当前实现，完成必要的接口、数据、兼容性与迁移设计，记录取舍。 使用 $platform-architecture-v2-cn 中适用的方法；非平台任务不扩展为平台架构设计。', 'plan': '依据需求与设计，拆成可验收任务，标明依赖、实现范围和真实验证方法。', 'implementation': '按确认任务实现代码，运行项目检查，修复失败，并更新实际变化涉及的规范和验证记录。', 'review': '独立核对需求、设计、代码和验证证据，审查完整用户路径、兼容性与可维护性。'}
+    value['stages'].setdefault('entry', {'skills': []})
+    value['stages'].setdefault('review', {'skills': ['trellis-check']})
+    if set(value['stages']) != {'entry', 'review', *STAGES[:4]}:
+        raise ValueError('Unknown or missing Agent stage')
+    for stage, spec in value['stages'].items():
+        if set(spec) - {'instruction','skills','inputs','artifact','review_skills'}:
+            raise ValueError('Unknown Agent stage setting: ' + stage)
+        spec.setdefault('instruction', re.sub(r'\$([a-zA-Z0-9_-]+)',lambda m:m[0] if m[1] in spec.get('skills',[]) else m[1],defaults[stage]))
+        spec.setdefault('inputs', [])
+        spec.setdefault('review_skills', ['reviewing-design-and-plans-cn'] if stage in STAGES[:3] else [])
+        if not isinstance(spec['instruction'],str) or not spec['instruction'].strip():
+            raise ValueError('Stage instruction must be nonempty text')
+        for key in ['skills','review_skills','inputs']:
+            if not isinstance(spec.get(key),list) or not all(isinstance(x,str) and x for x in spec[key]):
+                raise ValueError('Stage '+key+' must be a string list')
+        for name in spec['skills'] + spec['review_skills']:
+            if not relative_file(Path(source)/'full_harness/skills',name+'/SKILL.md').is_file():
+                raise ValueError('Skill missing: '+name)
+        for name in spec['inputs']:
+            relative_file(source,name.replace('{task}','1'))
+        if stage not in STAGES[:4]:continue
         if not spec.get('artifact'):
             raise ValueError('Stage must declare its handoff artifact')
         relative_file(source,spec['artifact'].replace('{task}','1'))

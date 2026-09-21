@@ -4,7 +4,7 @@ SOURCE=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(SOURCE))
 from full_harness.codex import invoke
 from full_harness.common import write_json
-from full_harness.runner import new_state, work_stage, review_stage, STAGES
+from full_harness.runner import new_state, run_agent, review_stage, STAGES
 source=SOURCE
 if '--run-live' not in sys.argv:raise SystemExit('Opt-in required: python3 tests/integration_full.py --run-live; uses authenticated Codex and model quota')
 root=Path(tempfile.mkdtemp(prefix='full-live-',dir=tempfile.gettempdir()));print('probe_root',root,flush=True)
@@ -48,7 +48,7 @@ state['instruction']='按已确认需求交付，每阶段阅读可复用 Skills
 write_json(session/'state.json',state)
 for stage in STAGES[:4]:
  print('starting',stage,flush=True)
- work_stage(project,session,state,stage);write_json(session/'state.json',state)
+ run_agent(project,session,state,stage);write_json(session/'state.json',state)
  print('stage',stage,state['status'],state.get('reason',''),flush=True)
  if state['status']!='running':break
 if state['status']=='running':

@@ -49,18 +49,18 @@ class RoutingTests(unittest.TestCase):
     def test_existing_code_runs_real_check_without_builder(self):
         (self.work/'fixed').write_text('already correct')
         self.state['completed']={'implementation':{'mode':'reuse'}}
-        with patch.object(runner,'work_stage',side_effect=AssertionError('must not code')):
+        with patch.object(runner,'run_agent',side_effect=AssertionError('must not code')):
             runner.verify_stage(self.root,self.root,self.state)
         self.assertEqual(self.state['stage'],'review')
         self.assertEqual(self.state['completed']['verification']['checks'][0]['code'],0)
     def test_failure_returns_to_builder_then_rechecks(self):
         self.state['completed']={'implementation':{'mode':'reuse'}}
         def repair(*args):(self.work/'fixed').write_text('repaired')
-        with patch.object(runner,'work_stage',side_effect=repair) as builder:
+        with patch.object(runner,'run_agent',side_effect=repair) as builder:
             runner.verify_stage(self.root,self.root,self.state)
         self.assertEqual(builder.call_count,1);self.assertEqual(self.state['stage'],'review')
     def test_repeat_failures_stop_at_bound(self):
-        with patch.object(runner,'work_stage') as builder:runner.verify_stage(self.root,self.root,self.state)
+        with patch.object(runner,'run_agent') as builder:runner.verify_stage(self.root,self.root,self.state)
         self.assertEqual(builder.call_count,2);self.assertEqual(self.state['status'],'blocked')
     def test_routing_cannot_bypass_missing_owner_checks(self):
         self.state['config']['checks']=[]
