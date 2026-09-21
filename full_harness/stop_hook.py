@@ -41,7 +41,7 @@ def evaluate(context_path, payload):
         gate.update(status=result['status'],reason=result.get('question') or result.get('summary'))
         write_json(gate_path,gate);return {}
     gate['attempts']+=1
-    if gate['attempts']>c['config']['max_attempts'] or time.time()>c['deadline']:
+    if gate['attempts']>c['config']['max_attempts'] or time.monotonic()>c['deadline_monotonic']:
         gate.update(status='blocked',reason='检查轮数或本阶段时限已达到上限；保留现场，不能宣称完成')
         write_json(gate_path,gate);return {}
     errors=[]; check_results=[]

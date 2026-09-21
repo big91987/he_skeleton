@@ -75,10 +75,13 @@ def begin(state,instruction,sha,runner,run_id):
     if state['runner']!=runner:raise ValueError('Persistent state belongs to another Runner')
     if state['baseline']!=sha:raise ValueError('Base revision changed: reconcile in a new task before continuing; previous evidence cannot be reused silently')
     if state['status']=='delivered':raise ValueError('This task has delivered; start a new Issue for the next iteration')
-    if state['status'] in {'needs_input','blocked'}:
+    if state['status'] in {'needs_input','blocked','waiting_review'}:
         token=state['reply_token']
         if not instruction.startswith(token+' '):raise ValueError('Reply with /develop '+token+' followed by your answer or recovery instruction')
         instruction=instruction[len(token):].strip()
+    if state['status']=='waiting_review':
+        state['stage']='implementation'
+        for stage in ['implementation','review','delivery']:state['completed'].pop(stage,None)
     state.update(instruction=instruction,status='running',run_id=run_id)
     state.pop('reply_token',None)
     state.pop('reason',None)
@@ -143,7 +146,7 @@ def work_stage(source,session,state,stage):
     context={'source':str(source),'workspace':str(workspace),'session':str(session),'evidence':str(evidence),
              'task':state['task'],'instruction':state.get('instruction',''),'stage':stage,'config':state['config'],
              'controls':state['controls'],'baseline':state['baseline'],
-             'deadline':time.time()+state['config']['agent_timeout'],'node_path':os.environ.get('NODE_PATH','')}
+             'deadline_monotonic':time.monotonic()+state['config']['agent_timeout'],'node_path':os.environ.get('NODE_PATH','')}
     write_json(evidence/'context.json',context)
     sid=recover_session(session)
     result,sid=invoke(source,workspace,session,prompt_for(source,state,stage),evidence/'agent',sid,evidence/'context.json')
@@ -206,23 +209,30 @@ def deliver(session,state):
         tree.append(item)
     if not tree:raise ValueError('No deliverable changes')
     branch='codex/full-task-'+str(state['task']['number'])
-    if not state.get('delivery_commit'):
-        # Never overwrite an existing branch, even if it has the expected name.
+    snapshot=digest(workspace)
+    if state.get('delivery_snapshot')!=snapshot:
         refs=api(repo,'git/matching-refs/heads/'+branch)
-        if any(x['ref']=='refs/heads/'+branch for x in refs):raise ValueError('Delivery branch already exists; inspect before retrying')
+        existing=[x for x in refs if x['ref']=='refs/heads/'+branch]
+        previous=state.get('delivery_commit')
+        if previous:
+            if not existing or existing[0]['object']['sha']!=previous:raise ValueError('Delivery branch changed externally')
+        elif existing:raise ValueError('Delivery branch already exists; inspect before retrying')
         t=api(repo,'git/trees','POST',{'base_tree':base['commit']['tree']['sha'],'tree':tree})
-        commit=api(repo,'git/commits','POST',{'message':'Deliver #'+str(state['task']['number'])+': '+state['task']['title'],'tree':t['sha'],'parents':[state['baseline']]})
-        # Persist intent before the non-idempotent create-ref operation.
-        state['delivery_commit']=commit['sha'];write_json(session/'state.json',state)
+        commit=api(repo,'git/commits','POST',{'message':'Deliver #'+str(state['task']['number'])+': '+state['task']['title'],'tree':t['sha'],'parents':[previous or state['baseline']]})
+        state.update(delivery_commit=commit['sha'],delivery_parent=previous,delivery_snapshot=snapshot)
+        write_json(session/'state.json',state)
     commit=state['delivery_commit']
     refs=api(repo,'git/matching-refs/heads/'+branch)
     existing=[x for x in refs if x['ref']=='refs/heads/'+branch]
-    if existing and existing[0]['object']['sha']!=commit:raise ValueError('Delivery branch changed externally')
+    if existing and existing[0]['object']['sha']!=commit:
+        if existing[0]['object']['sha']!=state.get('delivery_parent'):raise ValueError('Delivery branch changed externally')
+        api(repo,'git/refs/heads/'+branch,'PATCH',{'sha':commit,'force':False})
     if not existing:api(repo,'git/refs','POST',{'ref':'refs/heads/'+branch,'sha':commit})
     pulls=api(repo,'pulls?state=open&head='+repo.split('/')[0]+':'+branch)
     pr=pulls[0] if pulls else api(repo,'pulls','POST',{'title':state['task']['title'],'head':branch,'base':state['branch'],'draft':True,
         'body':'Closes #'+str(state['task']['number'])+'\n\n独立完整流程交付。各阶段记录与验证范围见 Issue 交付卡片。请审查后合入。'})
-    state.update(status='delivered',pr_url=pr['html_url'])
+    state.update(pr_url=pr['html_url'],pr_number=pr.get('number'))
+    pause(state,'waiting_review','已创建或更新待审 PR；可在 GitHub 审查合入，或回复具体修改意见继续当前任务。')
     state['completed']['delivery']={'summary':pr['html_url']}
 
 
@@ -286,6 +296,9 @@ def main():
             task={'number':number,'title':issue['title'],'body':issue.get('body') or ''}
             if state is None:state=new_state(source,session,task,repo,sha,branch,os.environ['RUNNER_NAME'])
             elif task!=state['task']:raise ValueError('Issue baseline edited; provide changes as a version-bound reply or start a new task')
+            if state.get('pr_number'):
+                pr=api(repo,'pulls/'+str(state['pr_number']))
+                if pr.get('merged_at') or pr.get('state')=='closed':raise ValueError('Delivery PR is merged or closed; use a new Issue for another iteration')
             begin(state,instruction,sha,os.environ['RUNNER_NAME'],os.environ['GITHUB_RUN_ID'])
         else:
             if state is None:raise ValueError('Task state is absent on this Runner; no silent session reset')

@@ -4,15 +4,20 @@ Date: 2026-09-21. Runtime: Codex CLI 0.151.0, local macOS Runner profile.
 
 ## Verified
 
-- 42 Python tests passed, including all 27 existing-flow tests. New tests cover actual check failure/retry, protected control changes, missing hooks, absent implementation checks, review rejection, stale replies, owner-only commands, installer ownership, native session recovery after interruption, and idempotent delivery after PR permission failure.
+- 44 Python tests passed, including all 27 existing-flow tests. New tests cover actual check failure/retry, protected control changes, missing hooks, absent implementation checks, review rejection, stale replies, owner-only commands, installer ownership, native session recovery after interruption, and idempotent delivery after PR permission failure.
 - The new Workflow YAML parses with eight named jobs and independent entry events.
 - A real Codex conversation asked two clarification questions and retained both answers and the business name through three calls with one native Session ID.
 - A real native Stop Hook rejected a deliberately premature ready result. The same Session created the missing file, reran the unchanged check, and passed on the second gate attempt.
 - Real requirements and design stages passed independent reviews. The planning review requested a precise executable test task; the builder repaired its plan within the same Session and passed the next review.
 
-## In progress / not claimed
+- The CLI integration reached delivery after requirements, design, planning, implementation and independent review. An implementation time-limit stop retained the same native Session; an explicit recovery instruction resumed it and passed the unchanged Owner check (seven real CLI assertions) and the generated eight-test suite.
+- The independent reviewer passed code/contract review and read-only supplementary CLI checks. It could not rerun the entire suite because its read-only sandbox disallowed temporary test storage; its report disclosed that limitation and relied on the matching successful fixed check evidence. This is not a claim of a second independent full test execution.
+- The clock guard now uses a monotonic deadline, matching subprocess timeout accounting; a regression test covers a wall-clock jump.
+- The reading_list integration branch passed its existing 16-action browser regression with real Chromium. Product code and the original workflow were not changed.
 
-The opt-in CLI project integration test is still running through implementation and independent acceptance. This document must be updated with its actual outcome before claiming the complete chain passed. GitHub delivery tests above are controlled API tests, not a claim that the experimental repository permits Actions-created PRs. Cloud state persistence, multi-Runner scheduling and hosted product previews are not implemented in this profile.
+## Not claimed
+
+The GitHub delivery tests are controlled API tests, not a live Actions-to-PR delivery demonstration. The repository currently disables Actions-created PRs; the delivery controller retains its branch and reports a blocker if that restriction applies. Cloud state persistence, multi-Runner scheduling and hosted product previews are not implemented in this profile.
 
 ## Reproduce
 

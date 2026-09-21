@@ -25,7 +25,7 @@ class FullWorkflowTests(unittest.TestCase):
                   'checks':[{'name':'real assertion','argv':[sys.executable,'-c','from pathlib import Path; assert Path("fixed").exists()']}]}
         self.context={'workspace':str(self.work),'evidence':str(self.evidence),'source':str(self.root),'session':str(self.root),
                       'controls':controls(self.work),'stage':'implementation','config':self.cfg,
-                      'task':{'number':1},'deadline':time.time()+60}
+                      'task':{'number':1},'deadline_monotonic':time.monotonic()+60}
         self.cp=self.root/'context.json';write_json(self.cp,self.context)
         self.ready={'last_assistant_message':json.dumps({'status':'ready','summary':'done','question':'','artifacts':['validation.md']})}
 
@@ -58,6 +58,12 @@ class FullWorkflowTests(unittest.TestCase):
         with patch.object(stop_hook,'review_prompt',return_value='review'),patch.object(stop_hook,'invoke',return_value=({'status':'changes','findings':['Missing creation path'],'summary':'gap'},'review-session')):
             result=stop_hook.evaluate(self.cp,self.ready)
         self.assertIn('Missing creation path',result['reason'])
+
+    def test_wall_clock_jump_does_not_expire_active_gate(self):
+        (self.work/'fixed').write_text('fixed')
+        with patch.object(stop_hook.time,'time',return_value=10**12):
+            stop_hook.evaluate(self.cp,self.ready)
+        self.assertEqual(json.loads((self.evidence/'gate.json').read_text())['status'],'passed')
 
     def test_attempt_limit_stops_loop(self):
         for _ in range(3):stop_hook.evaluate(self.cp,self.ready)
@@ -135,7 +141,15 @@ class FullWorkflowTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):runner.deliver(self.root,state)
             self.assertEqual(state['delivery_commit'],'newcommit')
             remote['allow_pr']=True;runner.deliver(self.root,state)
-        self.assertEqual(remote['commits'],1);self.assertEqual(state['status'],'delivered')
+        self.assertEqual(remote['commits'],1);self.assertEqual(state['status'],'waiting_review')
+
+    def test_human_pr_feedback_invalidates_acceptance_and_resumes_implementation(self):
+        state={'runner':'machine','baseline':'sha','status':'waiting_review','reply_token':'reply',
+               'stage':'delivery','completed':{'requirements':{},'design':{},'plan':{},'implementation':{},'review':{},'delivery':{}}}
+        runner.begin(state,'reply fix empty results','sha','machine','next-run')
+        self.assertEqual(state['stage'],'implementation')
+        self.assertEqual(set(state['completed']),{'requirements','design','plan'})
+        self.assertEqual(state['instruction'],'fix empty results')
 
     def test_cancelled_call_recovers_native_session_mapping(self):
         sid='11111111-2222-4333-8444-555555555555'
