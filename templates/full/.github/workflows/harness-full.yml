@@ -38,6 +38,13 @@ jobs:
       issues: write
       pull-requests: write
     outputs:
+      run_requirements: ${{ steps.stage.outputs.run_requirements }}
+      run_design: ${{ steps.stage.outputs.run_design }}
+      run_plan: ${{ steps.stage.outputs.run_plan }}
+      run_implementation: ${{ steps.stage.outputs.run_implementation }}
+      run_verification: ${{ steps.stage.outputs.run_verification }}
+      run_review: ${{ steps.stage.outputs.run_review }}
+      run_delivery: ${{ steps.stage.outputs.run_delivery }}
       continue: ${{ steps.stage.outputs.continue }}
     steps:
       - uses: actions/checkout@v4
@@ -62,8 +69,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
   requirements:
-    needs: entry
-    if: needs.entry.outputs.continue == 'true'
+    needs: [entry]
+    if: >-
+      always() && needs.entry.result == 'success' && needs.entry.outputs.run_requirements == 'true'
     # All jobs must select the SAME persistent machine. Give only that Runner
     # this unique label, and set FULL_STATE_ROOT to a private directory outside
     # the checkout. Other OSes require changing these Owner-owned labels.
@@ -98,8 +106,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
   design:
-    needs: requirements
-    if: needs.requirements.outputs.continue == 'true'
+    needs: [entry, requirements]
+    if: >-
+      always() && needs.entry.result == 'success' && needs.entry.outputs.run_design == 'true' &&
+      needs.requirements.result != 'failure' && needs.requirements.result != 'cancelled' && needs.requirements.outputs.continue != 'false'
     # All jobs must select the SAME persistent machine. Give only that Runner
     # this unique label, and set FULL_STATE_ROOT to a private directory outside
     # the checkout. Other OSes require changing these Owner-owned labels.
@@ -134,8 +144,11 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
   plan:
-    needs: design
-    if: needs.design.outputs.continue == 'true'
+    needs: [entry, requirements, design]
+    if: >-
+      always() && needs.entry.result == 'success' && needs.entry.outputs.run_plan == 'true' &&
+      needs.requirements.result != 'failure' && needs.requirements.result != 'cancelled' && needs.requirements.outputs.continue != 'false' &&
+      needs.design.result != 'failure' && needs.design.result != 'cancelled' && needs.design.outputs.continue != 'false'
     # All jobs must select the SAME persistent machine. Give only that Runner
     # this unique label, and set FULL_STATE_ROOT to a private directory outside
     # the checkout. Other OSes require changing these Owner-owned labels.
@@ -170,8 +183,12 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
   implementation:
-    needs: plan
-    if: needs.plan.outputs.continue == 'true'
+    needs: [entry, requirements, design, plan]
+    if: >-
+      always() && needs.entry.result == 'success' && needs.entry.outputs.run_implementation == 'true' &&
+      needs.requirements.result != 'failure' && needs.requirements.result != 'cancelled' && needs.requirements.outputs.continue != 'false' &&
+      needs.design.result != 'failure' && needs.design.result != 'cancelled' && needs.design.outputs.continue != 'false' &&
+      needs.plan.result != 'failure' && needs.plan.result != 'cancelled' && needs.plan.outputs.continue != 'false'
     # All jobs must select the SAME persistent machine. Give only that Runner
     # this unique label, and set FULL_STATE_ROOT to a private directory outside
     # the checkout. Other OSes require changing these Owner-owned labels.
@@ -205,9 +222,56 @@ jobs:
           path: ${{ runner.temp }}/full-public-${{ github.run_id }}-implementation
           if-no-files-found: ignore
           retention-days: 30
+  verification:
+    needs: [entry, requirements, design, plan, implementation]
+    if: >-
+      always() && needs.entry.result == 'success' && needs.entry.outputs.run_verification == 'true' &&
+      needs.requirements.result != 'failure' && needs.requirements.result != 'cancelled' && needs.requirements.outputs.continue != 'false' &&
+      needs.design.result != 'failure' && needs.design.result != 'cancelled' && needs.design.outputs.continue != 'false' &&
+      needs.plan.result != 'failure' && needs.plan.result != 'cancelled' && needs.plan.outputs.continue != 'false' &&
+      needs.implementation.result != 'failure' && needs.implementation.result != 'cancelled' && needs.implementation.outputs.continue != 'false'
+    # All jobs must select the SAME persistent machine. Give only that Runner
+    # this unique label, and set FULL_STATE_ROOT to a private directory outside
+    # the checkout. Other OSes require changing these Owner-owned labels.
+    runs-on: [self-hosted, macOS, ARM64, he-full]
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      continue: ${{ steps.stage.outputs.continue }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: verification
+        id: stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL_PUBLIC: ${{ runner.temp }}/full-public-${{ github.run_id }}-verification
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          test -n "$FULL_STATE_ROOT" || { echo 'Configure private FULL_STATE_ROOT and the unique he-full Runner label first'; exit 1; }
+          python3 full_harness/runner.py verification
+      - name: Downloadable stage documents
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-${{ github.run_id }}-verification
+          path: ${{ runner.temp }}/full-public-${{ github.run_id }}-verification
+          if-no-files-found: ignore
+          retention-days: 30
   review:
-    needs: implementation
-    if: needs.implementation.outputs.continue == 'true'
+    needs: [entry, requirements, design, plan, implementation, verification]
+    if: >-
+      always() && needs.entry.result == 'success' && needs.entry.outputs.run_review == 'true' &&
+      needs.requirements.result != 'failure' && needs.requirements.result != 'cancelled' && needs.requirements.outputs.continue != 'false' &&
+      needs.design.result != 'failure' && needs.design.result != 'cancelled' && needs.design.outputs.continue != 'false' &&
+      needs.plan.result != 'failure' && needs.plan.result != 'cancelled' && needs.plan.outputs.continue != 'false' &&
+      needs.implementation.result != 'failure' && needs.implementation.result != 'cancelled' && needs.implementation.outputs.continue != 'false' &&
+      needs.verification.result != 'failure' && needs.verification.result != 'cancelled' && needs.verification.outputs.continue != 'false'
     # All jobs must select the SAME persistent machine. Give only that Runner
     # this unique label, and set FULL_STATE_ROOT to a private directory outside
     # the checkout. Other OSes require changing these Owner-owned labels.
@@ -242,8 +306,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
   delivery:
-    needs: review
-    if: needs.review.outputs.continue == 'true'
+    needs: [entry, requirements, design, plan, implementation, verification, review]
+    if: >-
+      always() && needs.entry.result == 'success' && needs.entry.outputs.run_delivery == 'true' &&
+      needs.requirements.result != 'failure' && needs.requirements.result != 'cancelled' && needs.requirements.outputs.continue != 'false' &&
+      needs.design.result != 'failure' && needs.design.result != 'cancelled' && needs.design.outputs.continue != 'false' &&
+      needs.plan.result != 'failure' && needs.plan.result != 'cancelled' && needs.plan.outputs.continue != 'false' &&
+      needs.implementation.result != 'failure' && needs.implementation.result != 'cancelled' && needs.implementation.outputs.continue != 'false' &&
+      needs.verification.result != 'failure' && needs.verification.result != 'cancelled' && needs.verification.outputs.continue != 'false' &&
+      needs.review.result != 'failure' && needs.review.result != 'cancelled' && needs.review.outputs.continue != 'false'
     # All jobs must select the SAME persistent machine. Give only that Runner
     # this unique label, and set FULL_STATE_ROOT to a private directory outside
     # the checkout. Other OSes require changing these Owner-owned labels.
@@ -278,8 +349,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
   report:
-    needs: [entry, requirements, design, plan, implementation, review, delivery]
-    if: always() && needs.entry.result == 'success'
+    needs: [entry, requirements, design, plan, implementation, verification, review, delivery]
+    if: >-
+      always() && needs.entry.result == 'success'
     # All jobs must select the SAME persistent machine. Give only that Runner
     # this unique label, and set FULL_STATE_ROOT to a private directory outside
     # the checkout. Other OSes require changing these Owner-owned labels.

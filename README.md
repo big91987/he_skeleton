@@ -20,8 +20,10 @@ Workflow 和 Issue 表单由模板首次复制，之后归业务仓库 Owner 维
 
 ```mermaid
 flowchart LR
-  I[Issue /develop 或手动运行] --> E[读取 AGENTS 与项目索引]
-  E --> R[需求与 AC]
+  I[Issue /develop 或手动运行] --> E[读取项目材料并判别入口]
+  E --> R[按需：需求与 AC]
+  E -- 已有代码 --> CHECK[真实验证]
+  CHECK --> V
   R --> D[设计]
   D --> P[任务拆解]
   P --> C[实现]

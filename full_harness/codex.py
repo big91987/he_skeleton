@@ -33,12 +33,12 @@ def runtime_home(home):
     return home
 
 
-def invoke(source, workspace, session_dir, prompt, evidence, session_id=None, hook_context=None, review=False, timeout_override=None):
+def invoke(source, workspace, session_dir, prompt, evidence, session_id=None, hook_context=None, review=False, timeout_override=None, schema_override=None):
     if (workspace/'.codex').exists():
         raise ValueError('This initial runtime requires project .codex configuration to be reviewed and removed from the execution workspace before enabling the managed hook')
     evidence.mkdir(parents=True, exist_ok=False)
     home = runtime_home(session_dir/('review-home' if review else 'codex-home'))
-    schema = REVIEW_SCHEMA if review else RESULT_SCHEMA
+    schema = schema_override or (REVIEW_SCHEMA if review else RESULT_SCHEMA)
     write_json(evidence/'schema.json',schema)
     (evidence/'prompt.txt').write_text(prompt)
     # Project and user config must not add arbitrary hooks. The only hook below is
@@ -88,6 +88,8 @@ def invoke(source, workspace, session_dir, prompt, evidence, session_id=None, ho
         raise ValueError('Invalid result text')
     if result['status']=='needs_input' and not result['question'].strip():
         raise ValueError('Missing clarification question')
+    if schema_override is not None:
+        return result,ids[0]
     array_key = 'findings' if review else 'artifacts'
     if not isinstance(result[array_key],list) or not all(isinstance(x,str) for x in result[array_key]):
         raise ValueError('Invalid result array')

@@ -6,7 +6,7 @@ from pathlib import Path
 import signal
 import subprocess
 
-STAGES = ['requirements', 'design', 'plan', 'implementation', 'review', 'delivery']
+STAGES = ['requirements', 'design', 'plan', 'implementation', 'verification', 'review', 'delivery']
 CONTROL = ('.github/', '.codex/', '.agents/', 'harness/', 'full_harness/', '.harness/', '.trellis/scripts/')
 IGNORE = {'.git', '__pycache__', 'node_modules', '.venv', '.pytest_cache'}
 
@@ -101,7 +101,7 @@ def configuration(source):
         relative_file(source,spec['artifact'].replace('{task}','1'))
     for check in value.get('checks',[]):
         if not isinstance(check.get('name'),str) or not check['name']:raise ValueError('Check needs a name')
-        if any(x not in STAGES[:4] for x in check.get('stages',['implementation'])):raise ValueError('Invalid check stage')
+        if any(x not in STAGES[:5] for x in check.get('stages',['implementation'])):raise ValueError('Invalid check stage')
         if not isinstance(check.get('argv'),list) or not check['argv'] or not all(isinstance(x,str) and x for x in check['argv']):
             raise ValueError('Checks use explicit argument arrays')
         if set(check)-{'name','argv','cwd','stages'}:

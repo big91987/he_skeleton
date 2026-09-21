@@ -15,9 +15,10 @@ import time
 import uuid
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from full_harness.common import STAGES, configuration, controls, digest, files, read_json, relative_file, write_json
+from full_harness.common import STAGES, configuration, controls, digest, files, read_json, relative_file, write_json, run_process, clean_env
 from full_harness.codex import invoke
 from full_harness.stop_hook import review_prompt
+from full_harness.router import classify
 
 
 def api(repo,path,method='GET',data=None):
@@ -65,7 +66,7 @@ def new_state(source,session,task,repo,sha,branch,runner):
     for argv in [['init','-q'],['add','.'],['-c','user.name=Harness','-c','user.email=harness@example.invalid','commit','-q','--allow-empty','-m','Task baseline']]:
         subprocess.run(['git','-c','core.hooksPath=/dev/null',*argv],cwd=workspace,env=git_env,check=True,capture_output=True)
     state={'version':1,'repo':repo,'task':task,'baseline':sha,'branch':branch,'runner':runner,
-           'stage':'requirements','status':'running','completed':{},'turn':0,'config':cfg,
+           'stage':'entry','status':'running','completed':{},'turn':0,'config':cfg,
            'controls':controls(workspace),'baseline_files':{n:hashlib.sha256(b).hexdigest() for n,b in files(workspace).items()},
            'baseline_modes':{n:((workspace/n).stat().st_mode & 0o111) for n in files(workspace)},'history':[]}
     return state
@@ -80,8 +81,8 @@ def begin(state,instruction,sha,runner,run_id):
         if not instruction.startswith(token+' '):raise ValueError('Reply with /develop '+token+' followed by your answer or recovery instruction')
         instruction=instruction[len(token):].strip()
     if state['status']=='waiting_review':
-        state['stage']='implementation'
-        for stage in ['implementation','review','delivery']:state['completed'].pop(stage,None)
+        state['stage']='entry'
+        for stage in ['implementation','verification','review','delivery']:state['completed'].pop(stage,None)
     state.update(instruction=instruction,status='running',run_id=run_id)
     state.pop('reply_token',None)
     state.pop('reason',None)
@@ -99,7 +100,7 @@ def prompt_for(source,state,stage):
         skills.append('Skill 原位置（相对引用从此解析）：'+str(p)+'\n'+p.read_text())
     artifact=spec['artifact'].replace('{task}',str(state['task']['number']))
     packet={'task':state['task'],'stage':stage,'instruction':state.get('instruction',''),
-            'project_entries':cfg['entries'],'completed':state['completed'],
+            'project_entries':cfg['entries'],'completed':state['completed'],'routing':state.get('routing'),
             'handoff_artifact':artifact,'checks':cfg.get('checks',[]),'feedback':state.get('feedback','')}
     return ('你在持久化的项目任务会话里工作。本次只交付指定阶段。先阅读项目入口和引用的现状、约束与实际代码，再执行适用 Skill。\n'
         '已有 PRD、原型或代码可以直接复用，用本阶段交接记录说明来源、适用范围和缺口，不机械重写。'
@@ -137,6 +138,69 @@ def recover_session(session):
     return None
 
 
+def next_stage(state,after=None):
+    start=STAGES.index(after)+1 if after else 0
+    for stage in STAGES[start:]:
+        if stage not in state['completed']:return stage
+    return 'delivery'
+
+
+def assess_entry(source,session,state):
+    state['turn']+=1;checkpoint(session,state)
+    result=classify(source,session/'workspace',session,state,session/'turns'/str(state['turn'])/'routing')
+    state['routing']=result
+    if result['status']!='ready':
+        pause(state,result['status'],result['question'] or result['summary']);return
+    # Assessment can invalidate earlier outcomes when feedback changes the task.
+    state['completed']={}
+    for item in result['decisions']:
+        if item['action']!='run':
+            state['completed'][item['stage']]={'mode':item['action'],'summary':item['reason'],
+                'evidence':item['evidence_hashes']}
+    state['stage']=next_stage(state)
+
+
+def verify_stage(source,session,state,attempt=0):
+    if attempt>=state['config']['max_attempts']:
+        pause(state,'blocked','Verification repair limit reached');return
+    workspace=session/'workspace'
+    checks=[c for c in state['config'].get('checks',[]) if set(c.get('stages',['implementation'])) & {'implementation','verification'}]
+    if not checks:raise ValueError('No Owner-configured verification checks; routing cannot bypass verification')
+    if controls(workspace)!=state['controls']:raise ValueError('Execution controls changed')
+    before=digest(workspace)
+    impl=state['completed'].get('implementation',{})
+    # Reuse an exact matching, controller-produced gate; never a model claim.
+    gate_path=session/'turns'/str(impl.get('turn','missing'))/'gate.json'
+    gate=read_json(gate_path) if gate_path.exists() else {}
+    only_implementation=all('implementation' in c.get('stages',['implementation']) for c in checks)
+    if only_implementation and gate.get('status')=='passed' and gate.get('snapshot')==before:
+        outcomes=gate['checks']
+    else:
+        state['turn']+=1;checkpoint(session,state)
+        evidence=session/'turns'/str(state['turn']);evidence.mkdir(parents=True)
+        outcomes=[]
+        for i,check in enumerate(checks):
+            log=evidence/f'check-{i}.log';env=clean_env()
+            if os.environ.get('NODE_PATH'):env['NODE_PATH']=os.environ['NODE_PATH']
+            argv=[x.replace('{workspace}',str(workspace)).replace('{evidence}',str(evidence)) for x in check['argv']]
+            code=run_process(argv,relative_file(workspace,check.get('cwd','.')),env,log,state['config']['check_timeout'])
+            outcomes.append({'name':check['name'],'code':code,'log':log.name})
+            if code in (124,125):raise ValueError('Verification environment unavailable: '+check['name'])
+            if code:
+                state['feedback']=check['name']+' failed: '+log.read_text()[-6000:]
+                state['completed'].pop('implementation',None)
+                # Real check failure goes into the existing bounded implementation
+                # loop, not back to the human just because code was supplied.
+                work_stage(source,session,state,'implementation')
+                if state['status']!='running':return
+                # A verification-only failing check must also be included in the
+                # implementation gate, so repaired code is checked before return.
+                return verify_stage(source,session,state,attempt+1)
+        if digest(workspace)!=before:raise ValueError('Verification changed project files; evidence invalidated')
+    state['completed']['verification']={'summary':'Owner-configured checks passed','checks':outcomes,'snapshot':digest(workspace)}
+    state['stage']='review'
+
+
 def work_stage(source,session,state,stage):
     workspace=session/'workspace';state['turn']+=1
     state['stage']=stage
@@ -161,7 +225,7 @@ def work_stage(source,session,state,stage):
     artifact=gate['artifact'];path=relative_file(workspace,artifact)
     state['completed'][stage]={'artifact':artifact,'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),
                                'summary':result['summary'],'checks':gate.get('checks',[]),'turn':state['turn']}
-    state['stage']=STAGES[STAGES.index(stage)+1]
+    state['stage']=next_stage(state,stage)
     state['feedback']=''
 
 
@@ -169,12 +233,15 @@ def review_stage(source,session,state):
     workspace=session/'workspace'
     # The independent review may invalidate an earlier stage. Repairs are bounded
     # and use the original builder session, never the reviewer session.
+    if state['completed'].get('verification',{}).get('snapshot')!=digest(workspace):
+        verify_stage(source,session,state)
+        if state['status']!='running':return
     for attempt in range(state['config']['max_attempts']):
         state['turn']+=1;state['stage']='review';checkpoint(session,state)
         print('Executing independent review',flush=True)
         evidence=session/'turns'/str(state['turn'])
         context={'task':state['task'],'config':state['config'],'baseline':state['baseline'],
-                 'instruction':state.get('instruction',''),'check_results':state['completed'].get('implementation',{}).get('checks',[])}
+                 'instruction':state.get('instruction',''),'routing':state.get('routing'),'check_results':state['completed'].get('verification',{}).get('checks',[])}
         before=digest(workspace)
         result,sid=invoke(source,workspace,session,review_prompt(source,workspace,context,'review'),evidence,review=True,timeout_override=state['config']['review_timeout'])
         state['history'].append({'stage':'review','turn':state['turn'],'session_id':sid,'gate':result['status']})
@@ -191,6 +258,8 @@ def review_stage(source,session,state):
         for stage in STAGES[start:4]:
             work_stage(source,session,state,stage)
             if state['status']!='running':return
+        verify_stage(source,session,state)
+        if state['status']!='running':return
     pause(state,'blocked','独立评审整改达到上限。'+state.get('feedback',''))
 
 
@@ -207,7 +276,10 @@ def deliver(session,state):
         if name not in current:item['sha']=None
         else:item['sha']=api(repo,'git/blobs','POST',{'encoding':'base64','content':base64.b64encode(current[name]).decode()})['sha']
         tree.append(item)
-    if not tree:raise ValueError('No deliverable changes')
+    if not tree:
+        state['completed']['delivery']={'summary':'Existing code verified; no new changes to commit'}
+        pause(state,'waiting_review','已有材料验证完成，无新增代码改动；请查看评审与验证结果。')
+        return
     branch='codex/full-task-'+str(state['task']['number'])
     snapshot=digest(workspace)
     if state.get('delivery_snapshot')!=snapshot:
@@ -242,9 +314,13 @@ def report(session,state):
           '| 阶段 | 状态 | 产物 / 说明 |','|---|---|---|']
     for stage in STAGES:
         done=state['completed'].get(stage)
-        status='已检查' if done else (state['status'] if stage==state['stage'] else '尚未完成')
+        status=({'reuse':'复用已有产物','not_applicable':'无需执行'}.get(done.get('mode'),'已检查')) if done else (state['status'] if stage==state['stage'] else '尚未完成')
         detail=(done or {}).get('artifact') or (done or {}).get('summary','')
         rows.append('| '+stage+' | '+status+' | '+str(detail).replace('|','/').replace('\n',' ')[:600]+' |')
+    if state.get('routing'):
+        rows+=['','**入口判别：** '+state['routing']['summary']]
+        for item in state['routing'].get('decisions',[]):
+            rows+=['- '+item['stage']+' · '+item['action']+'：'+item['reason']+'；依据：'+', '.join(item['evidence'])]
     for stage in STAGES[:4]:
         name=state['config']['stages'][stage]['artifact'].replace('{task}',str(state['task']['number']))
         path=relative_file(session/'workspace',name)
@@ -305,8 +381,11 @@ def main():
             if state['run_id']!=os.environ['GITHUB_RUN_ID']:raise ValueError('Run checkpoint does not match')
             if state['runner']!=os.environ['RUNNER_NAME']:raise ValueError('This workflow must run on its original persistent Runner')
         try:
+            if args.stage=='entry' and state['status']=='running' and state['stage']=='entry':
+                assess_entry(source,session,state)
             if state['status']=='running' and args.stage==state['stage']:
                 if args.stage in STAGES[:4]:work_stage(source,session,state,args.stage)
+                elif args.stage=='verification':verify_stage(source,session,state)
                 elif args.stage=='review':review_stage(source,session,state)
                 elif args.stage=='delivery':deliver(session,state)
         except Exception as error:
@@ -315,6 +394,9 @@ def main():
         try:report(session,state)
         finally:write_json(state_path,state)
         output('continue','true' if state['status']=='running' else 'false')
+        if args.stage=='entry':
+            for stage in STAGES:
+                output('run_'+stage,'true' if state['status']=='running' and stage not in state['completed'] else 'false')
         output('task',number)
         output('status',state['status'])
         if state['status']=='blocked' and args.stage!='report':raise SystemExit(1)

@@ -25,7 +25,7 @@ def review_prompt(source, workspace, context, stage):
         '只有本阶段范围真实符合要求才返回 passed；不得要求低风险变更无意义地扩展文档。\n'
         +json.dumps({'stage':stage,'task':context['task'],'instruction':context.get('instruction',''),
                     'entries':context['config']['entries'],'stages':context['config']['stages'],
-                    'baseline':context.get('baseline'), 'checks':context.get('check_results',[])},ensure_ascii=False))
+                    'baseline':context.get('baseline'),'routing':context.get('routing'), 'checks':context.get('check_results',[])},ensure_ascii=False))
 
 
 def evaluate(context_path, payload):
@@ -53,11 +53,11 @@ def evaluate(context_path, payload):
     for name in result.get('artifacts',[]):
         if not relative_file(root,name).is_file():errors.append('声明的产物不存在：'+name)
     before=digest(root)
-    if c['stage']=='implementation' and not any('implementation' in x.get('stages',['implementation']) for x in c['config'].get('checks',[])):
+    if c['stage']=='implementation' and not any(set(x.get('stages',['implementation'])) & {'implementation','verification'} for x in c['config'].get('checks',[])):
         gate.update(status='blocked',reason='项目尚未配置任何实现验证入口；请 Owner 在 full.json 配置，不能由实现者降低标准')
         write_json(gate_path,gate);return {}
     for idx,check in enumerate(c['config'].get('checks',[])):
-        if c['stage'] not in check.get('stages',['implementation']):continue
+        if c['stage'] not in check.get('stages',['implementation']) and not (c['stage']=='implementation' and 'verification' in check.get('stages',[])):continue
         log=evidence/f'check-{gate["attempts"]}-{idx}.log'
         # Configuration originates in the fixed execution snapshot, not Agent edits.
         argv=[x.replace('{workspace}',str(root)).replace('{evidence}',str(evidence)) for x in check['argv']]

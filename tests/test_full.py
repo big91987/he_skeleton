@@ -98,7 +98,7 @@ class FullWorkflowTests(unittest.TestCase):
             calls.append(stage);s['completed'][stage]={'checks':[]};s['stage']=runner.STAGES[runner.STAGES.index(stage)+1]
         outcomes=[({'status':'changes','summary':'fix interface','question':'','return_stage':'design','findings':['contract missing']},'review1'),
                   ({'status':'passed','summary':'verified','question':'','return_stage':'implementation','findings':[]},'review2')]
-        with patch.object(runner,'review_prompt',return_value='review'),patch.object(runner,'invoke',side_effect=outcomes),patch.object(runner,'work_stage',side_effect=repair):
+        with patch.object(runner,'review_prompt',return_value='review'),patch.object(runner,'invoke',side_effect=outcomes),patch.object(runner,'work_stage',side_effect=repair),patch.object(runner,'verify_stage'):
             runner.review_stage(self.root,self.root,state)
         self.assertEqual(calls,['design','plan','implementation']);self.assertEqual(state['stage'],'delivery')
 
@@ -147,7 +147,7 @@ class FullWorkflowTests(unittest.TestCase):
         state={'runner':'machine','baseline':'sha','status':'waiting_review','reply_token':'reply',
                'stage':'delivery','completed':{'requirements':{},'design':{},'plan':{},'implementation':{},'review':{},'delivery':{}}}
         runner.begin(state,'reply fix empty results','sha','machine','next-run')
-        self.assertEqual(state['stage'],'implementation')
+        self.assertEqual(state['stage'],'entry')
         self.assertEqual(set(state['completed']),{'requirements','design','plan'})
         self.assertEqual(state['instruction'],'fix empty results')
 
