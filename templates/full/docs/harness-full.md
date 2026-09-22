@@ -56,3 +56,8 @@ The importer rejects symlinks and credential-like files, and caps 3,000 files, 2
 ## Toolbox upgrades
 
 Managed `full_harness/` updates come from a pinned toolbox commit. Owner-edited Workflow, stage configuration, AGENTS and project indexes are preserved. Adoption of the five-Job template is explicit; upgrading only runtime code does not rewrite an Owner Workflow. Version-1 nine-Job configuration can be normalized to the three authoring stages, but old active sessions and old Workflow entry commands are not silently migrated.
+
+
+### Live Agent logs
+
+Open the Actions run, select the current job, and expand the stage step. Codex JSON events and diagnostics are forwarded live with a `[codex]` prefix while the original `agent.jsonl` remains in private Runner storage. No separate session attachment is needed. Completed runs retain their console logs. Agent output and tool results are visible to users who can read the repository Actions logs; the controller does not print the input prompt or authentication files.

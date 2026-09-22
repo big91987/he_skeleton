@@ -66,7 +66,7 @@ def invoke(source, workspace, session_dir, prompt, evidence, session_id=None, ho
     log = evidence/'agent.jsonl'
     code = None
     try:
-        code = run_process(argv,workspace,env,log,timeout,prompt)
+        code = run_process(argv,workspace,env,log,timeout,prompt,stream=True)
     finally:
         ids=[]
         if log.exists():

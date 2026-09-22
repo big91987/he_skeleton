@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 import signal
 import subprocess
+import threading
 
 STAGES = ['requirements', 'design', 'development', 'verification', 'review', 'delivery']
 CONTROL = ('.github/', '.codex/', '.agents/', 'harness/', 'full_harness/', '.harness/', '.trellis/scripts/')
@@ -68,10 +69,28 @@ def clean_env():
         'HTTPS_PROXY','HTTP_PROXY','ALL_PROXY','NO_PROXY','https_proxy','http_proxy','all_proxy','no_proxy'}}
 
 
-def run_process(argv, cwd, env, log, timeout, prompt=None):
+def stream_log(log, done):
+    # Tail the retained file rather than pipe stdout: console forwarding must
+    # not change process timeouts, stdin handling or the durable raw evidence.
+    with Path(log).open(errors='replace') as reader:
+        while True:
+            line=reader.readline()
+            if line:
+                try:
+                    # Prefix every line so child output cannot issue Actions commands.
+                    print('[codex] '+line.rstrip('\n'),flush=True)
+                except (OSError,ValueError):return
+            elif done.is_set():return
+            else:done.wait(.1)
+
+
+def run_process(argv, cwd, env, log, timeout, prompt=None, *, stream=False):
     with Path(log).open('w') as output:
         p = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE if prompt is not None else subprocess.DEVNULL,
                              stdout=output, stderr=output, text=True, start_new_session=True)
+        done=threading.Event()
+        tail=threading.Thread(target=stream_log,args=(log,done),daemon=True) if stream else None
+        if tail:tail.start()
         try:
             p.communicate(prompt, timeout=timeout)
         except BaseException:
@@ -81,6 +100,9 @@ def run_process(argv, cwd, env, log, timeout, prompt=None):
                 try: p.wait(timeout=2)
                 except subprocess.TimeoutExpired: pass
             raise
+        finally:
+            done.set()
+            if tail:tail.join(timeout=2)
     return p.returncode
 
 
