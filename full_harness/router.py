@@ -1,6 +1,7 @@
 """Read-only LLM entry assessment; stable decision contract for replacement models."""
 import hashlib
 import json
+import re
 from pathlib import Path
 from .codex import invoke
 from .common import STAGES, digest, relative_file
@@ -9,7 +10,18 @@ SCHEMA={'type':'object','additionalProperties':False,'required':['status','summa
  'status':{'type':'string','enum':['ready','needs_input','blocked']},'summary':{'type':'string'},'question':{'type':'string'},
  'decisions':{'type':'array','items':{'type':'object','additionalProperties':False,'required':['stage','action','reason','evidence'],
  'properties':{'stage':{'type':'string','enum':STAGES[:3]},'action':{'type':'string','enum':['run','reuse','not_applicable']},
- 'reason':{'type':'string'},'evidence':{'type':'array','items':{'type':'string'}}}}}}}
+ 'reason':{'type':'string'},'evidence':{'type':'array','items':{'type':'string','description':'Use literal issue for the current Issue, otherwise an existing repository-relative file path.'}}}}}}}
+
+
+def canonical_evidence(name,state):
+    # Model output may spell out the current Issue; never resolve another Issue
+    # or an external URL to the current task's trusted baseline.
+    match=re.fullmatch(r'issue(?:\s+#?(\d+))?',name,re.IGNORECASE)
+    if match:
+        if match[1] is not None and int(match[1])!=int(state['task']['number']):
+            raise ValueError('Routing evidence references a different Issue: '+name)
+        return 'issue'
+    return name
 
 
 def evidence_hash(workspace,state,name):
@@ -30,6 +42,7 @@ def validate(result,workspace,state):
         if item['action'] not in {'run','reuse','not_applicable'} or not isinstance(item['reason'],str) or not item['reason'].strip():raise ValueError('Invalid routing decision')
         refs=item['evidence']
         if not isinstance(refs,list) or not all(isinstance(x,str) for x in refs):raise ValueError('Invalid routing evidence list')
+        refs=item['evidence']=[canonical_evidence(name,state) for name in refs]
         if item['action']=='reuse' and not refs:raise ValueError('Reuse requires concrete evidence')
         if item['stage']=='requirements' and item['action']=='not_applicable':raise ValueError('A task always needs a requirements baseline, possibly the Issue itself')
         if item['stage']=='development' and item['action']=='reuse' and not any(x!='issue' for x in refs):raise ValueError('Existing-code entry requires actual project files')

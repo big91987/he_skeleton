@@ -36,6 +36,22 @@ class RoutingTests(unittest.TestCase):
     def test_missing_evidence_cannot_skip_stage(self):
         result=self.decision(['reuse','run','run']);result['decisions'][0]['evidence']=['missing.md']
         with self.assertRaises(ValueError):router.validate(result,self.work,self.state)
+    def test_current_issue_reference_is_canonical_through_approval(self):
+        result=self.decision(['reuse','run','run'])
+        result['decisions'][0]['evidence']=['issue #1','prd.md']
+        self.apply(result)
+        self.assertEqual(result['decisions'][0]['evidence'],['issue','prd.md'])
+        self.assertIn('issue',result['decisions'][0]['evidence_hashes'])
+        self.assertIn('issue',runner.material_hashes(self.root,self.state,'requirements'))
+    def test_other_issue_reference_is_rejected(self):
+        result=self.decision(['reuse','run','run'])
+        result['decisions'][0]['evidence']=['issue #2']
+        with self.assertRaises(ValueError):router.validate(result,self.work,self.state)
+    def test_issue_alias_cannot_prove_existing_code(self):
+        result=self.decision(['reuse','run','reuse'])
+        result['decisions'][2]['evidence']=['Issue #1']
+        with self.assertRaisesRegex(ValueError,'actual project files'):
+            router.validate(result,self.work,self.state)
     def test_escape_and_illegal_stage_are_rejected(self):
         result=self.decision(['reuse','run','run']);result['decisions'][0]['evidence']=['../outside']
         with self.assertRaises(ValueError):router.validate(result,self.work,self.state)
