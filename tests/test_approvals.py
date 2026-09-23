@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,8 @@ from full_harness.common import controls, digest
 
 class ApprovalTests(unittest.TestCase):
     def setUp(self):
+        # Unit fixtures must not publish checkpoints from the surrounding CI job.
+        self.enterContext(patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}))
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)

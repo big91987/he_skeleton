@@ -1,3 +1,4 @@
+import os
 import sys
 import tempfile
 import unittest
@@ -10,6 +11,8 @@ from full_harness.common import controls
 
 class RoutingTests(unittest.TestCase):
     def setUp(self):
+        # Unit fixtures must not publish checkpoints from the surrounding CI job.
+        self.enterContext(patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}))
         t = tempfile.TemporaryDirectory()
         self.addCleanup(t.cleanup)
         self.root = Path(t.name)

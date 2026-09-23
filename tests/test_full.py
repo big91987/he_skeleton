@@ -15,6 +15,8 @@ from scripts.install_full import plan
 
 class FullWorkflowTests(unittest.TestCase):
     def setUp(self):
+        # Unit fixtures must not publish checkpoints from the surrounding CI job.
+        self.enterContext(patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}))
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
