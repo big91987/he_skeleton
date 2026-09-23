@@ -61,3 +61,12 @@ Managed `full_harness/` updates come from a pinned toolbox commit. Owner-edited 
 ### Live Agent logs
 
 Open the Actions run, select the current job, and expand the stage step. Codex JSON events and diagnostics are forwarded live with a `[codex]` prefix while the original `agent.jsonl` remains in private Runner storage. No separate session attachment is needed. Completed runs retain their console logs. Agent output and tool results are visible to users who can read the repository Actions logs; the controller does not print the input prompt or authentication files.
+
+
+### Python formatting and lint
+
+Runner setup: install `full_harness/requirements.txt` in its execution environment and ensure `ruff` is on the service PATH. The managed `full_harness/ruff.toml` selects the Ruff formatter (88 columns, spaces, double quotes) and E4/E7/E9/F/I lint rules.
+
+During development the Agent runs `python3 full_harness/quality.py fix` and resolves remaining errors. Both the Stop Hook and verification execute `python3 full_harness/quality.py check` without changing product files. Existing-code entry receives the same check. Missing Ruff blocks verification; formatting/lint failures return to the implementation loop. Owner functional checks are still mandatory.
+
+The gate scans product Python files, excluding managed control/runtime directories. Non-Python products do not require Ruff for this gate; configure their language-specific commands (for example Go formatting checks and `go vet`) in the Owner checks. The toolbox runtime is checked separately by its source CI. The Python gate is part of the independent full workflow; the legacy workflow is unchanged.
