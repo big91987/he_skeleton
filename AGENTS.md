@@ -9,3 +9,10 @@ Keep this experiment minimal and tool-neutral.
 - Persist task checkpoints outside disposable job directories before ending a run.
 - Report implemented, tested and pending capabilities separately.
 - Never claim a fixture, screenshot or mocked backend proves a real end-to-end business flow.
+
+
+## Python quality
+
+Use Ruff with 4-space indentation, double quotes, 88-character target line width, and the shared `full_harness/ruff.toml` rules. After editing product Python code, run `python3 full_harness/quality.py fix`, repair remaining errors, then run `python3 full_harness/quality.py check`. The Stop Hook and verification stage run read-only checks independently. Formatting and lint never replace functional tests. Do not weaken quality rules to pass a task. Install the pinned tool using `python3 -m pip install -r full_harness/requirements.txt` in the Runner environment.
+
+For this toolbox itself, run `ruff check --fix .`, `ruff format .`, `ruff format --check .`, and `ruff check .`. CI enforces the same rules and runs the regression suite.

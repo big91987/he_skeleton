@@ -8,3 +8,8 @@ Read `docs/README.md` before starting a task. Follow its links to project purpos
 - Ask for clarification only when a product decision, material ambiguity or unavailable prerequisite prevents progress. Investigate facts yourself.
 - Use `.harness/full.json` for stage handoff paths and verification commands. Its checks and workflow controls are Owner-managed.
 - See `docs/harness-full.md` for the independent full workflow, stage outputs and resumption contract.
+
+
+## Python quality
+
+Use Ruff with 4-space indentation, double quotes, 88-character target line width, and the shared `full_harness/ruff.toml` rules. After editing product Python code, run `python3 full_harness/quality.py fix`, repair remaining errors, then run `python3 full_harness/quality.py check`. The Stop Hook and verification stage run read-only checks independently. Formatting and lint never replace functional tests. Do not weaken quality rules to pass a task. Install the pinned tool using `python3 -m pip install -r full_harness/requirements.txt` in the Runner environment.
