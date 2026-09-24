@@ -209,7 +209,7 @@ class ApprovalTests(unittest.TestCase):
         with patch.object(runner, "api", return_value={"id": 1}):
             runner.report(self.root, self.state)
         text = (self.root / "public/status.md").read_text()
-        self.assertIn(" approve`", text)
+        self.assertIn("直接评论", text)
         self.assertIn("contract.json", text)
         self.assertTrue((self.root / "public/design/contract.json").is_file())
 

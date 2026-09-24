@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -28,6 +29,7 @@ from full_harness.common import (
     run_process,
     write_json,
 )
+from full_harness.dialogue import respond
 from full_harness.quality import checks as quality_checks
 from full_harness.router import classify
 from full_harness.stop_hook import review_prompt
@@ -55,25 +57,38 @@ def output(name, value):
             f.write(name + "=" + str(value) + "\n")
 
 
+def authorized(repo, actor):
+    if not actor or actor.endswith("[bot]"):
+        return False
+    if actor.casefold() == repo.split("/")[0].casefold():
+        return True
+    permission = api(repo, "collaborators/" + actor + "/permission")
+    return permission.get("permission") in {"admin", "maintain", "write"}
+
+
 def event_input(event, repo, actor, event_name):
-    owner = repo.split("/")[0]
-    if actor != owner or os.environ.get("GITHUB_TRIGGERING_ACTOR", actor) != owner:
-        raise ValueError("Only repository owner may start or resume this local Runner")
+    if event.get("sender", {}).get("type") == "Bot":
+        raise ValueError("Bot events cannot start the Runner")
+    if not authorized(repo, actor) or not authorized(
+        repo, os.environ.get("GITHUB_TRIGGERING_ACTOR", actor)
+    ):
+        raise ValueError("Repository write, maintain or admin permission is required")
+    if "pull_request" in event.get("issue", {}):
+        raise ValueError("Use an Issue, not a pull request comment")
     if event_name == "workflow_dispatch":
         inputs = event.get("inputs", {})
         task = inputs.get("task", "")
         instruction = inputs.get("instruction", "")
-    elif event_name == "issues" and event.get("action") in {"opened", "labeled"}:
-        if "harness-full" not in [x["name"] for x in event["issue"]["labels"]]:
-            raise ValueError("Missing full workflow label")
+    elif event_name == "issues" and event.get("action") == "opened":
         task = event["issue"]["number"]
         instruction = ""
     elif event_name == "issue_comment" and event.get("action") == "created":
-        body = event["comment"]["body"]
-        if not re.match(r"^/develop(?:\s|$)", body):
-            raise ValueError("Not a full workflow command")
+        if event.get("comment", {}).get("user", {}).get("type") == "Bot":
+            raise ValueError("Bot comments cannot start the Runner")
+        instruction = event["comment"]["body"].strip()
+        if re.match(r"^/develop(?:\s|$)", instruction):
+            instruction = instruction[len("/develop") :].strip()
         task = event["issue"]["number"]
-        instruction = body[len("/develop") :].strip()
     else:
         raise ValueError("Unsupported entry event")
     if not str(task).isdigit() or int(task) < 1:
@@ -190,6 +205,84 @@ def begin(state, instruction, sha, runner, run_id, session=None):
     state.update(instruction=instruction, status="running", run_id=run_id)
     state.pop("reply_token", None)
     state.pop("reason", None)
+
+
+def handle_message(source, session, state, instruction, event, sha, runner, run_id):
+    """Return True only when this message authorizes continued stage execution."""
+    if state["runner"] != runner or state["baseline"] != sha:
+        raise ValueError("Task runtime/baseline changed; reconcile before continuing")
+    token = state.get("reply_token", "")
+    if token and instruction.startswith(token + " "):
+        instruction = instruction[len(token) :].strip()
+    # Empty legacy /develop can start a new task, but cannot approve a waiting one.
+    if not instruction:
+        state["run_id"] = run_id
+        return state["status"] == "running"
+    state["turn"] += 1
+    evidence = session / "turns" / str(state["turn"]) / "agent"
+    before = digest(session / "workspace")
+    result = respond(
+        source, session, state, instruction, evidence, recover_session(session)
+    )
+    if digest(session / "workspace") != before:
+        raise ValueError("Read-only conversation changed project files")
+    state["run_id"] = run_id
+    state["last_reply"] = result["summary"] + (
+        "\n" + result["question"] if result["question"] else ""
+    )
+    state.setdefault("conversation", []).append(
+        {
+            "message": instruction,
+            "reply": state["last_reply"],
+            "intent": result["intent"],
+        }
+    )
+    intent = result["intent"]
+    if intent == "answer":
+        return False
+    if intent == "pause":
+        pause(state, "paused", "已按你的要求暂停。直接评论即可继续讨论或恢复。")
+        return False
+    if intent == "approve":
+        if state["status"] != "awaiting_approval":
+            state["last_reply"] += "\n当前没有待批准的阶段产物；未推进阶段。"
+            return False
+        quote = result["approval_quote"].strip()
+        if not quote or quote not in instruction:
+            state["last_reply"] += (
+                "\n未找到明确的确认原话，请说明是否认可当前待审版本。"
+            )
+            return False
+        requested = state["pending_approval"].get("requested_at")
+        sent = event.get("comment", {}).get("created_at")
+        if not requested or (
+            sent
+            and datetime.fromisoformat(sent.replace("Z", "+00:00"))
+            < datetime.fromisoformat(requested)
+        ):
+            state["last_reply"] += (
+                "\n这条评论早于当前待审版本，或旧状态缺少版本时间。请重新查看后确认。"
+            )
+            if not requested:
+                state["pending_approval"]["requested_at"] = (
+                    datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+                )
+            return False
+        instruction = "approve"
+    elif intent == "continue" and state["status"] == "awaiting_approval":
+        state["last_reply"] += "\n当前需要确认产物；尚未明确批准，因此保留待审状态。"
+        return False
+    elif intent == "change":
+        state["feedback"] = "用户修改意见：" + instruction
+    # Existing version checks remain internal; users no longer copy a token.
+    bound = (
+        (state.get("reply_token", "") + " " + instruction).strip()
+        if state["status"]
+        in {"needs_input", "blocked", "waiting_review", "awaiting_approval"}
+        else instruction
+    )
+    begin(state, bound, sha, runner, run_id, session)
+    return True
 
 
 def pause(state, status, reason):
@@ -347,6 +440,7 @@ def request_approval(session, state, stage):
     state["pending_approval"] = {
         "stage": stage,
         "files": material_hashes(session, state, stage),
+        "requested_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
     }
     pause(
         state,
@@ -898,17 +992,13 @@ def report(session, state):
                 ]
     if state.get("reason"):
         rows += ["", state["reason"][:8000]]
-    if state.get("reply_token"):
+    if state.get("last_reply"):
+        rows += ["", "### Agent 回复", "", state["last_reply"]]
+    if state.get("reply_token") or state["status"] == "paused":
+        rows += ["", "直接评论即可提问、补充需求、要求修改或恢复，无需命令和 ID。"]
         if state["status"] == "awaiting_approval":
             rows += [
-                "",
-                "**确认本版本：** `/develop " + state["reply_token"] + " approve`",
-                "**要求修改：** `/develop " + state["reply_token"] + " 具体修改意见`",
-            ]
-        else:
-            rows += [
-                "",
-                "回复：`/develop " + state["reply_token"] + " 你的回答或恢复说明`",
+                "确认当前版本时请明确回复，例如：**这版需求确认通过，继续下一阶段。**"
             ]
     if state.get("pr_url"):
         rows += ["", "交付 PR：" + state["pr_url"]]
@@ -975,6 +1065,7 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX)
         state_path = session / "state.json"
         state = read_json(state_path) if state_path.exists() else None
+        conversation_only = False
         if args.stage == "entry":
             issue = api(repo, "issues/" + str(number))
             if "pull_request" in issue:
@@ -1000,14 +1091,42 @@ def main():
                     raise ValueError(
                         "Delivery PR is merged or closed; use a new Issue for another iteration"
                     )
-            begin(
-                state,
-                instruction,
-                sha,
-                os.environ["RUNNER_NAME"],
-                os.environ["GITHUB_RUN_ID"],
-                session,
-            )
+            comment_id = event.get("comment", {}).get("id")
+            if comment_id and str(comment_id) in state.get("handled_comments", []):
+                state["run_id"] = os.environ["GITHUB_RUN_ID"]
+                write_json(state_path, state)
+                output("continue", "false")
+                print("Comment already handled; no duplicate Agent turn.", flush=True)
+                return
+            if os.environ["GITHUB_EVENT_NAME"] == "issue_comment" or instruction:
+                try:
+                    conversation_only = not handle_message(
+                        source,
+                        session,
+                        state,
+                        instruction,
+                        event,
+                        sha,
+                        os.environ["RUNNER_NAME"],
+                        os.environ["GITHUB_RUN_ID"],
+                    )
+                    if comment_id:
+                        state.setdefault("handled_comments", []).append(str(comment_id))
+                except Exception as error:
+                    pause(state, "blocked", str(error))
+                    state["run_id"] = os.environ["GITHUB_RUN_ID"]
+                finally:
+                    write_json(state_path, state)
+            else:
+                begin(
+                    state,
+                    instruction,
+                    sha,
+                    os.environ["RUNNER_NAME"],
+                    os.environ["GITHUB_RUN_ID"],
+                    session,
+                )
+
         else:
             if state is None:
                 raise ValueError(
@@ -1022,11 +1141,12 @@ def main():
         try:
             if (
                 args.stage == "entry"
+                and not conversation_only
                 and state["status"] == "running"
                 and state["stage"] == "entry"
             ):
                 assess_entry(source, session, state)
-            if state["status"] == "running":
+            if state["status"] == "running" and not conversation_only:
                 if args.stage in STAGES[:2] and args.stage == state["stage"]:
                     run_agent(source, session, state, args.stage)
                 elif args.stage == "development" and state["stage"] in STAGES[2:]:
@@ -1039,13 +1159,19 @@ def main():
             report(session, state)
         finally:
             write_json(state_path, state)
-        output("continue", "true" if state["status"] == "running" else "false")
+        output(
+            "continue",
+            "true"
+            if state["status"] == "running" and not conversation_only
+            else "false",
+        )
         if args.stage == "entry":
             for stage in STAGES[:3]:
                 output(
                     "run_" + stage,
                     "true"
                     if state["status"] == "running"
+                    and not conversation_only
                     and (
                         stage == "development"
                         or stage not in state.get("approvals", {})
@@ -1054,7 +1180,11 @@ def main():
                 )
         output("task", number)
         output("status", state["status"])
-        if state["status"] == "blocked" and args.stage != "report":
+        if (
+            state["status"] == "blocked"
+            and args.stage != "report"
+            and not conversation_only
+        ):
             raise SystemExit(1)
 
 

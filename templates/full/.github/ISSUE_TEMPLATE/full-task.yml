@@ -20,4 +20,4 @@ body:
       description: 兼容要求、环境限制、必须跑通的用户路径和已确认决定。
   - type: markdown
     attributes:
-      value: 提交表单不会启动 Agent。仓库 Owner 在评论中发送 `/develop`，或手动运行 Full development workflow。
+      value: 拥有 write、maintain 或 admin 权限的用户提交后自动启动。外部用户的需求等待授权成员介入；后续直接评论即可提问或补充，无需命令和 ID。
