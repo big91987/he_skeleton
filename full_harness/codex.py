@@ -70,6 +70,7 @@ def invoke(
     timeout_override=None,
     schema_override=None,
     skills=None,
+    read_only=False,
 ):
     if (workspace / ".codex").exists():
         raise ValueError(
@@ -84,7 +85,7 @@ def invoke(
     # assembled by the controller from its fixed execution revision.
     config = (
         'approval_policy="never"\nsandbox_mode='
-        + json.dumps("read-only" if review else "workspace-write")
+        + json.dumps("read-only" if review or read_only else "workspace-write")
         + "\n"
     )
     config += 'model_provider="harness_http"\n[model_providers.harness_http]\nname="OpenAI HTTPS"\nwire_api="responses"\nrequires_openai_auth=true\nsupports_websockets=false\n'

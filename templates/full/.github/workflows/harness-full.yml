@@ -7,11 +7,11 @@ on:
         type: string
         required: true
       instruction:
-        description: Instruction, or reply token followed by answer
+        description: Optional natural-language message
         type: string
         default: ''
   issues:
-    types: [opened, labeled]
+    types: [opened]
   issue_comment:
     types: [created]
 permissions:
@@ -22,12 +22,39 @@ concurrency:
 env:
   FULL_STATE_ROOT: ${{ vars.FULL_STATE_ROOT }}
 jobs:
-  entry:
+  authorize:
     if: >-
-      github.actor == github.repository_owner && github.triggering_actor == github.repository_owner &&
-      (github.event_name == 'workflow_dispatch' ||
-       (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'harness-full')) ||
-       (github.event_name == 'issue_comment' && (github.event.comment.body == '/develop' || startsWith(github.event.comment.body, '/develop '))))
+      github.event.sender.type != 'Bot' && !github.event.issue.pull_request &&
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'issues' || github.event_name == 'issue_comment')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      allowed: ${{ steps.permission.outputs.allowed }}
+    steps:
+      - name: Verify repository permissions before local execution
+        id: permission
+        uses: actions/github-script@v7
+        with:
+          script: |
+            async function allowed(username) {
+              if (!username || username.endsWith('[bot]')) return false;
+              if (username.toLowerCase() === context.repo.owner.toLowerCase()) return true;
+              try {
+                const {data} = await github.rest.repos.getCollaboratorPermissionLevel({...context.repo, username});
+                return ['admin', 'maintain', 'write'].includes(data.permission);
+              } catch (error) {
+                if (error.status === 403 || error.status === 404) return false;
+                throw error;
+              }
+            }
+            const actors = [...new Set([context.actor, process.env.GITHUB_TRIGGERING_ACTOR || context.actor])];
+            const permitted = (await Promise.all(actors.map(allowed))).every(Boolean);
+            core.setOutput('allowed', String(permitted));
+            await core.summary.addRaw(permitted ? 'Authorized contributor: continue on the project Runner.' : 'Waiting for a contributor with write, maintain or admin permission to comment or start the task.').write();
+  entry:
+    needs: [authorize]
+    if: needs.authorize.outputs.allowed == 'true'
     # All jobs must select the SAME persistent machine. Give only that Runner
     # this unique label, and set FULL_STATE_ROOT to a private directory outside
     # the checkout. Other OSes require changing these Owner-owned labels.

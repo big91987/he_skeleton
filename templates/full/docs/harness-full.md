@@ -1,20 +1,20 @@
 # Full development workflow: three stages
 
-The independent `harness-full.yml` profile preserves the original `harness.yml`, `harness/loop.py` and `/harness` entry. Do not add the old `harness` label when trying this profile.
+The independent `harness-full.yml` profile provides automatic Issue entry and natural conversation. The legacy `harness.yml` remains available through manual workflow dispatch; disable its Issue/comment triggers when adopting this profile to avoid duplicate workflow records.
 
 ## First use
 
 1. Install from a reviewed toolbox commit with `python3 scripts/install_full.py <project-repository> --ref <reviewed-commit>`. Review and commit the resulting files. The new Workflow must be on the default branch for Issue commands to work.
-2. Configure one trusted persistent macOS ARM64 Runner with the unique `he-full` label, Python 3.11+, Git, authenticated Codex CLI 0.151.0-compatible native Skills, Stop hooks and exec resume, and `gh`. Set `FULL_STATE_ROOT` outside every checkout. The pilot accepts only repository Owner commands, never fork checkouts.
+2. Configure one trusted persistent macOS ARM64 Runner with the unique `he-full` label, Python 3.11+, Git, authenticated Codex CLI 0.151.0-compatible native Skills, Stop hooks and exec resume, and `gh`. Set `FULL_STATE_ROOT` outside every checkout. A hosted authorization Job checks the initiating and rerunning users against repository write/maintain/admin permission before local execution. The Python controller rechecks permission. Bots and PR comments are rejected; no fork checkout is executed.
 3. Configure `.harness/full.json` with project entry documents, stage instructions, allowed Skills, handoff artifacts and real check commands. An empty check list cannot pass development. Browser projects may need a Runner-specific `NODE_PATH`; non-web projects use their own actual checks.
-4. Create a blank Issue describing the change and existing materials. Comment `/develop` to start. Alternatively add the `harness-full` label or manually run **Full development workflow** with the existing Issue number. Ordinary Issue creation or comments do not start this profile.
-5. Read the Issue status card. Answer clarifications using its exact `/develop <token> <answer>` command. A clarification answer is not approval of the resulting document.
-6. When the card says it awaits approval, review its expanded documents/data contracts or download the Actions artifact. Copy `/develop <token> approve` to approve that exact revision. To request edits, use `/develop <token> <specific changes>` instead. Repeat this for requirements and design.
+4. A user with repository write/maintain/admin permission creates an Issue and the task starts automatically; no label or slash command is needed. An external user's Issue waits for an authorized member to comment or manually start it. Ordinary authorized comments also wake the task. Labels do not trigger this workflow, avoiding the opened/labeled duplicate.
+5. Ask questions, answer clarifications, request changes, or pause directly in comments. The working Codex Session processes a read-only conversation turn first. Questions and ambiguous statements receive an answer without approving or invalidating the current stage; explicit change/continue intent resumes authoring. `/develop` is accepted for compatibility, including trailing whitespace.
+6. Review pending documents, then explicitly confirm in natural language (for example, “这版需求确认通过，继续下一阶段”). The controller still checks the pending artifact hashes and the comment time, and requires a confirmation quote from the message. A general “continue” is not automatic approval. Reply IDs stay internal. Older pending records without a confirmation timestamp require another confirmation after the card is refreshed.
 7. After design approval, development runs implementation, checks, independent review and repairs automatically, then creates a draft PR. Review and merge the product PR manually. If repository policy disallows Actions-created PRs, delivery reports the restriction and retains its branch; it does not change repository settings.
 
 ## What Actions shows
 
-Five Jobs: **entry → requirements → design → development → report**. The three middle Jobs are the business stages; entry restores/routes the task, report publishes status and downloadable material. Completed earlier Jobs are skipped in later runs. The requirement and design Jobs end normally while awaiting a person: a green Job does not mean the entire task has shipped.
+Six Jobs: **authorize → entry → requirements → design → development → report**. Authorization runs on a hosted runner; only permitted users reach the persistent project Runner. The three middle Jobs are the business stages; entry restores/routes the task, report publishes status and downloadable material. Completed earlier Jobs are skipped in later runs. The requirement and design Jobs end normally while awaiting a person: a green Job does not mean the entire task has shipped.
 
 | Stage | Work | Completion condition |
 | --- | --- | --- |
@@ -24,7 +24,7 @@ Five Jobs: **entry → requirements → design → development → report**. The
 
 Documents already supplied can be reused. Entry assessment cannot approve them on behalf of a person. A design-not-applicable decision is also shown for confirmation. Existing code still undergoes real verification and independent review. Task breakdown and detailed implementation design are development activities, not separate human gates.
 
-Each confirmation records hashes for every declared/reused artifact, including data contracts. Stale tokens and changed documents cannot use the old confirmation. A development change to an approved baseline invalidates the affected stage and later approvals, returns to that stage, and asks for confirmation again. Reviewers can request the same return. Tests and ordinary code-review defects instead return automatically to development.
+Each confirmation records hashes for every declared/reused artifact, including data contracts. Comments predating the pending version and changed documents cannot use the old confirmation. A development change to an approved baseline invalidates the affected stage and later approvals, returns to that stage, and asks for confirmation again. Reviewers can request the same return. Tests and ordinary code-review defects instead return automatically to development.
 
 ## Agent configuration and native Skills
 
@@ -55,7 +55,7 @@ The importer rejects symlinks and credential-like files, and caps 3,000 files, 2
 
 ## Toolbox upgrades
 
-Managed `full_harness/` updates come from a pinned toolbox commit. Owner-edited Workflow, stage configuration, AGENTS and project indexes are preserved. Adoption of the five-Job template is explicit; upgrading only runtime code does not rewrite an Owner Workflow. Version-1 nine-Job configuration can be normalized to the three authoring stages, but old active sessions and old Workflow entry commands are not silently migrated.
+Managed `full_harness/` updates come from a pinned toolbox commit. Owner-edited Workflow, stage configuration, AGENTS and project indexes are preserved. Adoption of the authorization/three-stage template is explicit; upgrading only runtime code does not rewrite an Owner Workflow. Version-1 nine-Job configuration can be normalized to the three authoring stages, but old active sessions and old Workflow entry commands are not silently migrated.
 
 
 ### Live Agent logs
@@ -70,3 +70,10 @@ Runner setup: install `full_harness/requirements.txt` in its execution environme
 During development the Agent runs `python3 full_harness/quality.py fix` and resolves remaining errors. Both the Stop Hook and verification execute `python3 full_harness/quality.py check` without changing product files. Existing-code entry receives the same check. Missing Ruff blocks verification; formatting/lint failures return to the implementation loop. Owner functional checks are still mandatory.
 
 The gate scans product Python files, excluding managed control/runtime directories. Non-Python products do not require Ruff for this gate; configure their language-specific commands (for example Go formatting checks and `go vet`) in the Owner checks. The toolbox runtime is checked separately by its source CI. The Python gate is part of the independent full workflow; the legacy workflow is unchanged.
+
+
+### Conversation and execution boundaries
+
+`dialogue.py` interprets authorized messages in a read-only turn of the same native working Session. It returns answer/change/approve/pause/continue; it cannot grant access or advance stages itself. `runner.py` validates the outcome against the retained stage and pending artifact revision. Answers are retained in task history and displayed on the Issue status card. Stage approval remains explicit. Replayed handled comment IDs do not create another Agent turn.
+
+An ordinary update to the default branch still does not migrate existing task workspaces or approvals. New tasks use the new workflow revision. GitHub may display skipped records for bot/external events, but the local Runner is not scheduled for them.

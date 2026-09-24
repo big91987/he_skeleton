@@ -172,7 +172,7 @@ class FullWorkflowTests(unittest.TestCase):
             json.loads((self.evidence / "gate.json").read_text())["status"], "blocked"
         )
 
-    def test_owner_and_exact_command(self):
+    def test_owner_and_legacy_command(self):
         event = {
             "action": "created",
             "issue": {"number": 3},
@@ -183,11 +183,14 @@ class FullWorkflowTests(unittest.TestCase):
                 runner.event_input(event, "owner/repo", "owner", "issue_comment"),
                 (3, "token answer"),
             )
-            with self.assertRaises(ValueError):
-                runner.event_input(event, "owner/repo", "stranger", "issue_comment")
+            with patch.object(runner, "api", return_value={"permission": "read"}):
+                with self.assertRaises(ValueError):
+                    runner.event_input(event, "owner/repo", "stranger", "issue_comment")
             event["comment"]["body"] = "/developer"
-            with self.assertRaises(ValueError):
-                runner.event_input(event, "owner/repo", "owner", "issue_comment")
+            self.assertEqual(
+                runner.event_input(event, "owner/repo", "owner", "issue_comment"),
+                (3, "/developer"),
+            )
 
     def test_stale_reply_and_base_drift_rejected(self):
         state = {
