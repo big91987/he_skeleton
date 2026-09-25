@@ -299,6 +299,8 @@ def agent_input(state, stage, session):
         "instruction": state.get("instruction", ""),
         "project_entries": cfg["entries"],
         "completed": state["completed"],
+        "approvals": state.get("approvals", {}),
+        "approval_policy": "审批事实只由控制器 approvals 记录维护，绑定文件哈希和确认运行记录。不在 PRD 或设计正文维护 Pending User Approval、已批准等流程状态。Skill 的推荐状态应输出到阶段结果，不写入需求或设计正文。已有获批文档的历史待确认措辞不代表审批失效，不得仅为更新此措辞修改获批文档。缺审批记录或文件哈希变化仍须人工确认。",
         "routing": state.get("routing"),
         "stage_instruction": spec.get(
             "instruction", "完成当前阶段并留下可检查的交接产物。"
@@ -621,6 +623,7 @@ def run_agent(source, session, state, stage):
         "config": state["config"],
         "controls": state["controls"],
         "baseline": state["baseline"],
+        "approvals": state.get("approvals", {}),
         "approved_files": {
             n: h
             for approval in state.get("approvals", {}).values()
@@ -729,6 +732,7 @@ def review_stage(source, session, state):
             "baseline": state["baseline"],
             "instruction": state.get("instruction", ""),
             "routing": state.get("routing"),
+            "approvals": state.get("approvals", {}),
             "check_results": state["completed"]
             .get("verification", {})
             .get("checks", []),
