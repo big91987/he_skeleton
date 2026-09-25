@@ -921,7 +921,7 @@ def report(session, state):
         + "/actions/runs/"
         + str(state.get("run_id", ""))
     )
-    from full_harness.progress import NAMES, progress_rows
+    from full_harness.progress import NAMES, STATUSES, progress_rows
 
     rows = progress_rows(state)
     if state.get("routing"):
@@ -944,6 +944,7 @@ def report(session, state):
             ]
         rows += ["", "</details>"]
     public_files = {}
+    stage_documents = {}
     for stage in STAGES[:3]:
         done = state["completed"].get(stage, {})
         names = set(done.get("artifacts", [])) | set(done.get("evidence", {}))
@@ -965,7 +966,7 @@ def report(session, state):
                 content = path.read_text()[:5000]
                 if path.suffix != ".md":
                     content = "```" + path.suffix[1:] + "\n" + content + "\n```"
-                rows += [
+                document_rows = [
                     "",
                     "<details><summary>📄 "
                     + NAMES[stage]
@@ -977,6 +978,8 @@ def report(session, state):
                     "",
                     "</details>",
                 ]
+                rows += document_rows
+                stage_documents.setdefault(stage, []).extend(document_rows)
     if state.get("last_reply"):
         rows += ["", "### Agent 回复", "", state["last_reply"]]
     if state.get("reply_token") or state["status"] == "paused":
@@ -1008,6 +1011,69 @@ def report(session, state):
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
             f.write(body + "\n")
+    from full_harness.timeline import publish
+
+    stage = (
+        state["stage"]
+        if state["stage"] in NAMES
+        else "development"
+        if state["stage"] in STAGES[2:]
+        else "entry"
+    )
+    title = NAMES.get(stage, "任务受理")
+    reply_rows = [
+        "### " + title + "阶段更新",
+        "",
+        "[总进度](https://github.com/"
+        + state["repo"]
+        + "/issues/"
+        + str(state["task"]["number"])
+        + ")",
+        "",
+    ]
+    if state.get("last_reply"):
+        reply_rows += ["**Agent 回复：**", state["last_reply"], ""]
+    reply_rows += [
+        "**当前状态：** " + STATUSES.get(state["status"], state["status"]),
+        "",
+        state.get("reason", "正在处理本阶段；结果会更新在这条回复中。"),
+    ]
+    reply_rows += stage_documents.get(stage, [])
+    if state["status"] == "awaiting_approval":
+        reply_rows += [
+            "",
+            "审阅上方产物后，直接评论“这版"
+            + title
+            + "确认通过，继续下一阶段”，或提出修改意见。",
+        ]
+    reply_rows += ["", "[阶段运行日志及下载包](" + run_url + ")"]
+    reply_body = "\n".join(reply_rows)
+    for private_path in [str(session), str(Path.home())]:
+        reply_body = reply_body.replace(private_path, "<private-runtime>")
+    if not state.get("comment_id"):
+        overview = "\n".join(progress_rows(state))
+        for private_path in [str(session), str(Path.home())]:
+            overview = overview.replace(private_path, "<private-runtime>")
+        comment = api(
+            state["repo"],
+            "issues/" + str(state["task"]["number"]) + "/comments",
+            "POST",
+            {"body": overview},
+        )
+        state["comment_id"] = comment["id"]
+    reply_url = publish(api, state, reply_body)
+    state["latest_stage_reply"] = reply_url
+    state.setdefault("stage_reply_urls", {})[stage] = reply_url
+    # Keep the top card compact; artifacts and conversation live chronologically.
+    body = (
+        "\n".join(progress_rows(state))
+        + "\n\n[查看最新阶段回复与产物]("
+        + reply_url
+        + ")"
+    )
+    body = body.replace("展开下方", "打开最新阶段回复，展开")
+    for private_path in [str(session), str(Path.home())]:
+        body = body.replace(private_path, "<private-runtime>")
     if state.get("comment_id"):
         api(
             state["repo"],
