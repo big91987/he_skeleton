@@ -1,5 +1,7 @@
 """Publish one chronological reply per stage and workflow wake-up."""
 
+import re
+
 
 def publish(api, state, body):
     stage = state["stage"]
@@ -35,6 +37,7 @@ def publish(api, state, body):
             if len(comments) < 100:
                 break
             page += 1
+    body = re.sub(r"\[([^\]]+)\]\(<private-runtime>[^)]*\)", r"\1（见下方产物）", body)
     text = marker + "\n" + body
     if record:
         if record.get("body") != text:
