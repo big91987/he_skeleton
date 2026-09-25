@@ -55,10 +55,20 @@ def progress_rows(state):
             "展开下方「" + name + "产物」" if done.get("artifact") else "尚无已通过产物"
         )
         run = state.get("stage_runs", {}).get(stage) or done.get("run_id")
-        links = [f"[阶段日志]({base}{run})"] if run else []
-        approval = state.get("approvals", {}).get(stage, {}).get("run_id")
-        if approval:
-            links.append(f"[确认记录]({base}{approval})")
+        job_url = state.get("stage_job_urls", {}).get(stage)
+        links = [f"[阶段日志]({job_url or base + str(run)})"] if job_url or run else []
+        approval = state.get("approvals", {}).get(stage, {})
+        comment = approval.get("comment_id")
+        if comment:
+            issue_url = (
+                "https://github.com/"
+                + state["repo"]
+                + "/issues/"
+                + str(state["task"]["number"])
+            )
+            links.append(f"[用户确认]({issue_url}#issuecomment-{comment})")
+        elif approval:
+            links.append("已记录用户确认")
         rows.append(
             f"| {name} | {statuses[stage]} | {artifact} | {' · '.join(links) or '—'} |"
         )

@@ -281,7 +281,10 @@ def handle_message(source, session, state, instruction, event, sha, runner, run_
         in {"needs_input", "blocked", "waiting_review", "awaiting_approval"}
         else instruction
     )
+    approved_stage = state["stage"]
     begin(state, bound, sha, runner, run_id, session)
+    if intent == "approve" and event.get("comment", {}).get("id"):
+        state["approvals"][approved_stage]["comment_id"] = event["comment"]["id"]
     return True
 
 
@@ -1133,6 +1136,7 @@ def main():
             if state["status"] == "running" and not conversation_only:
                 if args.stage in STAGES[:3]:
                     state.setdefault("stage_runs", {})[args.stage] = state["run_id"]
+                    state.get("stage_job_urls", {}).pop(args.stage, None)
                     write_json(state_path, state)
                     report(session, state)
                 if args.stage in STAGES[:2] and args.stage == state["stage"]:
