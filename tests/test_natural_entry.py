@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from full_harness import runner
+from full_harness import dialogue, runner
 
 
 class NaturalEntryTests(unittest.TestCase):
@@ -136,9 +136,17 @@ class NaturalEntryTests(unittest.TestCase):
         self.assertIn("requirements", self.state["approvals"])
         self.assertEqual(self.state["stage"], "design")
 
+    def test_contextual_short_approval_advances_current_pending_version(self):
+        self.assertTrue(self.message("approve", "ok 继续吧", "ok 继续吧"))
+        self.assertEqual(self.state["stage"], "design")
+        self.assertIn("requirements", self.state["approvals"])
+
     def test_continue_is_not_approval(self):
-        self.assertFalse(self.message("continue", "继续看看"))
-        self.assertEqual(self.state["status"], "awaiting_approval")
+        self.assertTrue(self.message("continue_stage", "继续修改需求"))
+        self.assertEqual(self.state["stage"], "requirements")
+        self.assertEqual(self.state["status"], "running")
+        self.assertNotIn("pending_approval", self.state)
+        self.assertNotIn("requirements", self.state["completed"])
 
     def test_approval_needs_actual_quote_and_current_version(self):
         self.assertFalse(self.message("approve", "能解释一下吗", "我批准了"))
@@ -152,14 +160,14 @@ class NaturalEntryTests(unittest.TestCase):
             self.message("approve", "批准当前版本", "批准当前版本")
 
     def test_change_reopens_stage_without_approving(self):
-        self.assertTrue(self.message("change", "补充权限说明"))
+        self.assertTrue(self.message("continue_stage", "补充权限说明"))
         self.assertEqual(self.state["stage"], "requirements")
         self.assertEqual(self.state["status"], "running")
         self.assertNotIn("requirements", self.state["completed"])
 
     def test_pause_does_not_start_work(self):
-        self.assertFalse(self.message("pause", "先暂停"))
-        self.assertEqual(self.state["status"], "paused")
+        self.assertFalse(self.message("answer", "先暂停"))
+        self.assertEqual(self.state["status"], "awaiting_approval")
 
     def test_read_only_turn_cannot_change_files(self):
         def bad(*args):
@@ -178,3 +186,26 @@ class NaturalEntryTests(unittest.TestCase):
                     "machine",
                     "next",
                 )
+
+    def test_continuation_text_cannot_become_approval_command(self):
+        self.assertTrue(self.message("continue_stage", "approve"))
+        self.assertEqual(self.state["stage"], "requirements")
+        self.assertNotIn("requirements", self.state.get("approvals", {}))
+
+    def test_dialogue_resumes_session_with_current_skills_and_context(self):
+        self.state["config"]["stages"]["requirements"]["skills"] = ["requirements"]
+        self.state["conversation"] = [{"message": "上个问题", "reply": "之前回答"}]
+        result = {"intent": "answer", "approval_quote": ""}
+        with patch.object(dialogue, "invoke", return_value=(result, None)) as invoke:
+            dialogue.respond(
+                self.root, self.root, self.state, "解释一下", self.root / "turn", "sid"
+            )
+        args, kwargs = invoke.call_args
+        self.assertEqual(kwargs["session_id"], "sid")
+        self.assertEqual(kwargs["skills"], ["requirements"])
+        self.assertTrue(kwargs["read_only"])
+        self.assertIn("上个问题", args[3])
+        self.assertEqual(
+            dialogue.SCHEMA["properties"]["intent"]["enum"],
+            ["answer", "continue_stage", "approve"],
+        )

@@ -46,7 +46,15 @@ class ApprovalTests(unittest.TestCase):
     def approve(self, stage):
         runner.request_approval(self.root, self.state, stage)
         token = self.state["reply_token"]
-        runner.begin(self.state, token + " approve", "sha", "machine", "2", self.root)
+        runner.begin(
+            self.state,
+            token + " approve",
+            "sha",
+            "machine",
+            "2",
+            self.root,
+            approve=True,
+        )
 
     def test_approval_advances_only_after_explicit_confirmation(self):
         runner.request_approval(self.root, self.state, "requirements")
@@ -54,7 +62,15 @@ class ApprovalTests(unittest.TestCase):
         token = self.state["reply_token"]
         with self.assertRaises(ValueError):
             runner.begin(self.state, "old approve", "sha", "machine", "2", self.root)
-        runner.begin(self.state, token + " approve", "sha", "machine", "2", self.root)
+        runner.begin(
+            self.state,
+            token + " approve",
+            "sha",
+            "machine",
+            "2",
+            self.root,
+            approve=True,
+        )
         self.assertEqual(self.state["stage"], "design")
         self.assertIn("requirements", self.state["approvals"])
 
@@ -81,7 +97,13 @@ class ApprovalTests(unittest.TestCase):
         (self.work / "prd.md").write_text("different scope")
         with self.assertRaises(ValueError):
             runner.begin(
-                self.state, token + " approve", "sha", "machine", "2", self.root
+                self.state,
+                token + " approve",
+                "sha",
+                "machine",
+                "2",
+                self.root,
+                approve=True,
             )
         self.assertNotIn("requirements", self.state.get("approvals", {}))
 
