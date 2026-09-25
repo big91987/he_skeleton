@@ -158,7 +158,7 @@ def new_state(source, session, task, repo, sha, branch, runner):
     return state
 
 
-def begin(state, instruction, sha, runner, run_id, session=None):
+def begin(state, instruction, sha, runner, run_id, session=None, *, approve=False):
     if state["runner"] != runner:
         raise ValueError("Persistent state belongs to another Runner")
     if state["baseline"] != sha:
@@ -185,7 +185,7 @@ def begin(state, instruction, sha, runner, run_id, session=None):
         instruction = instruction[len(token) :].strip()
     if state["status"] == "awaiting_approval":
         stage = state["stage"]
-        if instruction == "approve":
+        if approve:
             if session is None:
                 raise ValueError("Approval requires retained task files")
             pending = state["pending_approval"]
@@ -240,9 +240,6 @@ def handle_message(source, session, state, instruction, event, sha, runner, run_
     intent = result["intent"]
     if intent == "answer":
         return False
-    if intent == "pause":
-        pause(state, "paused", "已按你的要求暂停。直接评论即可继续讨论或恢复。")
-        return False
     if intent == "approve":
         if state["status"] != "awaiting_approval":
             state["last_reply"] += "\n当前没有待批准的阶段产物；未推进阶段。"
@@ -268,12 +265,8 @@ def handle_message(source, session, state, instruction, event, sha, runner, run_
                     datetime.now(timezone.utc).replace(microsecond=0).isoformat()
                 )
             return False
-        instruction = "approve"
-    elif intent == "continue" and state["status"] == "awaiting_approval":
-        state["last_reply"] += "\n当前需要确认产物；尚未明确批准，因此保留待审状态。"
-        return False
-    elif intent == "change":
-        state["feedback"] = "用户修改意见：" + instruction
+    elif intent != "continue_stage":
+        raise ValueError("Invalid conversation decision")
     # Existing version checks remain internal; users no longer copy a token.
     bound = (
         (state.get("reply_token", "") + " " + instruction).strip()
@@ -282,7 +275,7 @@ def handle_message(source, session, state, instruction, event, sha, runner, run_
         else instruction
     )
     approved_stage = state["stage"]
-    begin(state, bound, sha, runner, run_id, session)
+    begin(state, bound, sha, runner, run_id, session, approve=intent == "approve")
     if intent == "approve" and event.get("comment", {}).get("id"):
         state["approvals"][approved_stage]["comment_id"] = event["comment"]["id"]
     return True

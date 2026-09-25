@@ -100,6 +100,7 @@ for stage in STAGES[:3]:
             "probe-runner",
             "local-integration",
             session,
+            approve=True,
         )
         print("synthetic Owner approved", stage, flush=True)
     if state["status"] != "running":
