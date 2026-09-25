@@ -47,6 +47,9 @@ def review_prompt(source, workspace, context, stage):
         "审查设计/规划时不把尚未实现代码当成缺陷，但必须判断本阶段是否足以交接。"
         "发现问题返回 changes 和明确 findings、return_stage；缺用户决策返回 needs_input；环境阻塞返回 blocked。"
         "只有本阶段范围真实符合要求才返回 passed；不得要求低风险变更无意义地扩展文档。\n"
+        "审批事实以控制器 approvals 中的文件版本和确认运行记录为准；核对当前文件哈希与记录一致。"
+        "已确认且哈希一致的文档，其历史待确认措辞不是未审批证据，不得仅为更新此措辞要求修改获批文档。"
+        "PRD/设计正文不维护流程审批状态；评审结论写入本次输出。无审批记录或版本不匹配时不能据此放行。\n"
         + json.dumps(
             {
                 "stage": stage,
@@ -56,6 +59,7 @@ def review_prompt(source, workspace, context, stage):
                 "stage_material_to_review": stage,
                 "stages": contracts,
                 "baseline": context.get("baseline"),
+                "approvals": context.get("approvals", {}),
                 "routing": context.get("routing"),
                 "checks": context.get("check_results", []),
             },

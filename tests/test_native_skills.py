@@ -90,6 +90,17 @@ class AgentInputTests(unittest.TestCase):
         self.assertNotIn("$author-skill", prompt)
         self.assertIn("仅评审当前阶段", prompt)
 
+    def test_approval_evidence_reaches_author_and_reviewer(self):
+        self.state["approvals"] = {
+            "requirements": {"files": {"prd.md": "approved-hash"}, "run_id": "42"}
+        }
+        prompt, packet = runner.agent_input(self.state, "design", self.root)
+        self.assertEqual(packet["approvals"], self.state["approvals"])
+        self.assertIn("不在 PRD", prompt)
+        review = stop_hook.review_prompt(self.root, self.root, self.state, "design")
+        self.assertIn("approved-hash", review)
+        self.assertIn("历史待确认", review)
+
     def test_router_does_not_invoke_stage_skills(self):
         self.state["config"]["stages"]["design"]["instruction"] = (
             "CREATE DESIGN using $author-skill"
