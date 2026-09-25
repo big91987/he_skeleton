@@ -9,6 +9,8 @@ import subprocess
 import threading
 from pathlib import Path
 
+from .console import Console
+
 STAGES = ["requirements", "design", "development", "verification", "review", "delivery"]
 CONTROL = (
     ".github/",
@@ -104,6 +106,7 @@ def clean_env():
             "PATH",
             "TMPDIR",
             "LANG",
+            "GITHUB_ACTIONS",
             "HTTPS_PROXY",
             "HTTP_PROXY",
             "ALL_PROXY",
@@ -119,16 +122,17 @@ def clean_env():
 def stream_log(log, done):
     # Tail the retained file rather than pipe stdout: console forwarding must
     # not change process timeouts, stdin handling or the durable raw evidence.
+    console = Console()
     with Path(log).open(errors="replace") as reader:
         while True:
             line = reader.readline()
             if line:
                 try:
-                    # Prefix every line so child output cannot issue Actions commands.
-                    print("[codex] " + line.rstrip("\n"), flush=True)
+                    console.feed(line)
                 except (OSError, ValueError):
                     return
             elif done.is_set():
+                console.finish()
                 return
             else:
                 done.wait(0.1)
