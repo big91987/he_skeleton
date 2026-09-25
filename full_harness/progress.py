@@ -51,9 +51,14 @@ def progress_rows(state):
     base = "https://github.com/" + state["repo"] + "/actions/runs/"
     for stage, name in NAMES.items():
         done = state.get("completed", {}).get(stage, {})
-        artifact = (
-            "展开下方「" + name + "产物」" if done.get("artifact") else "尚无已通过产物"
-        )
+        reply_url = state.get("stage_reply_urls", {}).get(stage)
+        artifact = "尚无已通过产物"
+        if done.get("artifact"):
+            artifact = (
+                f"[查看{name}产物]({reply_url})"
+                if reply_url
+                else f"[下载{name}产物]({base}{done.get('run_id') or state.get('run_id', '')})"
+            )
         run = state.get("stage_runs", {}).get(stage) or done.get("run_id")
         job_url = state.get("stage_job_urls", {}).get(stage)
         links = [f"[阶段日志]({job_url or base + str(run)})"] if job_url or run else []
