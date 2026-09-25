@@ -127,6 +127,12 @@ def invoke(
     if review:
         timeout = timeout_override or 480
     log = evidence / "agent.jsonl"
+    from .console import Console
+
+    console = Console()
+    console.text("── " + evidence.name + " · 记录 " + evidence.parent.name + " ──")
+    console.text("Skills：" + (", ".join(skills or []) or "无"))
+    console.text("会话：" + ("恢复已有 Session" if session_id else "新建 Session"))
     code = None
     try:
         code = run_process(argv, workspace, env, log, timeout, prompt, stream=True)
