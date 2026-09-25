@@ -207,6 +207,82 @@ class FullWorkflowTests(unittest.TestCase):
         self.assertEqual(state["instruction"], "yes")
         self.assertEqual(state["status"], "running")
 
+    def test_documents_complete_without_stop_hook(self):
+        for index, stage in enumerate(("requirements", "design")):
+            state = {
+                "config": self.cfg,
+                "task": {"number": 1},
+                "turn": index,
+                "controls": controls(self.work),
+                "baseline": "sha",
+                "history": [],
+                "completed": {},
+                "status": "running",
+                "stage": stage,
+            }
+            with (
+                patch.object(runner, "agent_input", return_value=("task", {})),
+                patch.object(
+                    runner,
+                    "invoke",
+                    return_value=(
+                        {
+                            "status": "ready",
+                            "summary": "done",
+                            "question": "",
+                            "artifacts": ["validation.md"],
+                        },
+                        "builder",
+                    ),
+                ) as call,
+            ):
+                runner.run_agent(self.root, self.root, state, stage)
+            self.assertIsNone(call.call_args.args[6])
+            self.assertEqual(state["status"], "awaiting_approval")
+            self.assertIn("validation.md", state["pending_approval"]["files"])
+            self.assertFalse(
+                (self.root / "turns" / str(state["turn"]) / "gate.json").exists()
+            )
+
+    def test_documents_missing_artifact_or_clarification_do_not_request_approval(self):
+        cases = [
+            ("ready", "", "blocked"),
+            ("needs_input", "Which role?", "needs_input"),
+        ]
+        (self.work / "validation.md").unlink()
+        for index, (status, question, expected) in enumerate(cases):
+            state = {
+                "config": self.cfg,
+                "task": {"number": 1},
+                "turn": index,
+                "controls": controls(self.work),
+                "baseline": "sha",
+                "history": [],
+                "completed": {},
+                "status": "running",
+                "stage": "requirements",
+            }
+            with (
+                patch.object(runner, "agent_input", return_value=("task", {})),
+                patch.object(
+                    runner,
+                    "invoke",
+                    return_value=(
+                        {
+                            "status": status,
+                            "summary": "result",
+                            "question": question,
+                            "artifacts": [],
+                        },
+                        "builder",
+                    ),
+                ),
+            ):
+                runner.run_agent(self.root, self.root, state, "requirements")
+            self.assertEqual(state["status"], expected)
+            self.assertNotIn("pending_approval", state)
+            self.assertEqual(state["completed"], {})
+
     def test_missing_hook_gate_never_passes(self):
         state = {
             "config": self.cfg,

@@ -640,21 +640,23 @@ def run_agent(source, session, state, stage):
             prompt,
             evidence / "agent",
             sid,
-            evidence / "context.json",
+            evidence / "context.json" if stage == "development" else None,
             skills=state["config"]["stages"][stage]["skills"],
         )
     finally:
         # Preserve the compact input checkpoint even if a started native turn is interrupted.
         if (evidence / "agent").exists():
             write_json(evidence / "agent/input.json", packet)
-    gate = (
-        read_json(evidence / "gate.json")
-        if (evidence / "gate.json").exists()
-        else {
-            "status": "blocked",
-            "reason": "Native Stop Hook did not supply a verified gate",
-        }
-    )
+    gate = {"status": "not_applicable"}
+    if stage == "development":
+        gate = (
+            read_json(evidence / "gate.json")
+            if (evidence / "gate.json").exists()
+            else {
+                "status": "blocked",
+                "reason": "Native Stop Hook did not supply a verified gate",
+            }
+        )
     state["history"].append(
         {
             "stage": stage,
@@ -675,7 +677,7 @@ def run_agent(source, session, state, stage):
     if result["status"] != "ready":
         pause(state, result["status"], result["question"] or result["summary"])
         return
-    if gate["status"] != "passed":
+    if stage == "development" and gate["status"] != "passed":
         pause(
             state,
             gate["status"]
@@ -685,12 +687,26 @@ def run_agent(source, session, state, stage):
         )
         return
     if (
-        gate.get("snapshot") != digest(workspace)
-        or controls(workspace) != state["controls"]
-    ):
+        stage == "development" and gate.get("snapshot") != digest(workspace)
+    ) or controls(workspace) != state["controls"]:
         pause(state, "blocked", "Workspace changed after verification")
         return
-    artifact = gate["artifact"]
+    artifact = (
+        gate["artifact"]
+        if stage == "development"
+        else state["config"]["stages"][stage]["artifact"].replace(
+            "{task}", str(state["task"]["number"])
+        )
+    )
+    if stage != "development":
+        path = relative_file(workspace, artifact)
+        if not path.is_file() or not path.read_text().strip():
+            pause(state, "blocked", "本阶段产物缺失或为空：" + artifact)
+            return
+        for name in result.get("artifacts", []):
+            if not relative_file(workspace, name).is_file():
+                pause(state, "blocked", "声明的产物不存在：" + name)
+                return
     path = relative_file(workspace, artifact)
     state["completed"][stage] = {
         "run_id": state.get("run_id"),
