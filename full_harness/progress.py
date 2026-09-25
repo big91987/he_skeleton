@@ -19,7 +19,7 @@ def progress_rows(state):
         "<!-- harness-full -->",
         "### 任务进度 · #" + str(state["task"]["number"]),
         "",
-        "这张卡持续更新，保留跨轮次进度。Actions 中的 Skipped 仅表示该轮不重复执行。",
+        "这是本次运行的状态快照；Issue 按时间追加记录，不覆盖历史。Actions 中的 Skipped 仅表示该轮不重复执行。",
         "",
     ]
     statuses = {}

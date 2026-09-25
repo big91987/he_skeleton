@@ -1024,7 +1024,7 @@ def report(session, state):
     reply_rows = [
         "### " + title + "阶段更新",
         "",
-        "[总进度](https://github.com/"
+        "[任务记录](https://github.com/"
         + state["repo"]
         + "/issues/"
         + str(state["task"]["number"])
@@ -1036,7 +1036,7 @@ def report(session, state):
     reply_rows += [
         "**当前状态：** " + STATUSES.get(state["status"], state["status"]),
         "",
-        state.get("reason", "正在处理本阶段；结果会更新在这条回复中。"),
+        state.get("reason", "正在处理本阶段；后续结果将按时间顺序另发回复。"),
     ]
     reply_rows += stage_documents.get(stage, [])
     if state["status"] == "awaiting_approval":
@@ -1050,45 +1050,9 @@ def report(session, state):
     reply_body = "\n".join(reply_rows)
     for private_path in [str(session), str(Path.home())]:
         reply_body = reply_body.replace(private_path, "<private-runtime>")
-    if not state.get("comment_id"):
-        overview = "\n".join(progress_rows(state))
-        for private_path in [str(session), str(Path.home())]:
-            overview = overview.replace(private_path, "<private-runtime>")
-        comment = api(
-            state["repo"],
-            "issues/" + str(state["task"]["number"]) + "/comments",
-            "POST",
-            {"body": overview},
-        )
-        state["comment_id"] = comment["id"]
     reply_url = publish(api, state, reply_body)
     state["latest_stage_reply"] = reply_url
     state.setdefault("stage_reply_urls", {})[stage] = reply_url
-    # Keep the top card compact; artifacts and conversation live chronologically.
-    body = (
-        "\n".join(progress_rows(state))
-        + "\n\n[查看最新阶段回复与产物]("
-        + reply_url
-        + ")"
-    )
-    body = body.replace("展开下方", "打开最新阶段回复，展开")
-    for private_path in [str(session), str(Path.home())]:
-        body = body.replace(private_path, "<private-runtime>")
-    if state.get("comment_id"):
-        api(
-            state["repo"],
-            "issues/comments/" + str(state["comment_id"]),
-            "PATCH",
-            {"body": body},
-        )
-    else:
-        comment = api(
-            state["repo"],
-            "issues/" + str(state["task"]["number"]) + "/comments",
-            "POST",
-            {"body": body},
-        )
-        state["comment_id"] = comment["id"]
 
 
 def main():
