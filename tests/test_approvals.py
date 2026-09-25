@@ -213,6 +213,20 @@ class ApprovalTests(unittest.TestCase):
         self.assertIn("contract.json", text)
         self.assertTrue((self.root / "public/design/contract.json").is_file())
 
+    def test_reporting_never_edits_existing_issue_history(self):
+        self.state["comment_id"] = 777
+        self.state["last_reply"] = "Initial answer"
+        with patch.object(runner, "api", return_value={"id": 100}) as api:
+            runner.report(self.root, self.state)
+            runner.report(self.root, self.state)
+            self.state["last_reply"] = "Correction after checking"
+            runner.report(self.root, self.state)
+        methods = [c.args[2] for c in api.call_args_list if len(c.args) > 2]
+        self.assertEqual(methods, ["POST", "POST"])
+        self.assertFalse(
+            any("issues/comments/777" in c.args[1] for c in api.call_args_list)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

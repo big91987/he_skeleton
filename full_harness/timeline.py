@@ -1,16 +1,28 @@
-"""Publish one chronological reply per stage and workflow wake-up."""
+"""Append immutable Issue events; deduplicate only delivery retries."""
 
+import hashlib
+import json
 import re
 
 
 def publish(api, state, body):
-    stage = state["stage"]
-    if stage in {"verification", "review", "delivery"}:
-        stage = "development"
-    key = str(state.get("run_id", "local")) + ":" + stage
-    marker = "<!-- harness-stage:" + key + " -->"
-    replies = state.setdefault("stage_replies", {})
-    record = replies.get(key)
+    body = re.sub(r"\[([^\]]+)\]\(<private-runtime>[^)]*\)", r"\1（见下方产物）", body)
+    identity = [
+        state.get("run_id"),
+        state.get("turn"),
+        state["stage"],
+        state.get("status"),
+        body,
+    ]
+    signature = hashlib.sha256(
+        json.dumps(identity, ensure_ascii=False).encode()
+    ).hexdigest()
+    last = state.get("last_timeline_event", {})
+    if last.get("signature") == signature:
+        return last["url"]
+    sequence = state.get("timeline_sequence", 0) + 1
+    marker = f"<!-- harness-event:{sequence}:{signature} -->"
+    record = None
     if record is None:
         # Recover a successful POST whose checkpoint was interrupted. Only trust
         # our bot's exact marker, never a user-supplied lookalike comment.
@@ -37,23 +49,15 @@ def publish(api, state, body):
             if len(comments) < 100:
                 break
             page += 1
-    body = re.sub(r"\[([^\]]+)\]\(<private-runtime>[^)]*\)", r"\1（见下方产物）", body)
-    text = marker + "\n" + body
-    if record:
-        if record.get("body") != text:
-            api(
-                state["repo"],
-                "issues/comments/" + str(record["id"]),
-                "PATCH",
-                {"body": text},
-            )
-    else:
+    if record is None:
         comment = api(
             state["repo"],
             f"issues/{state['task']['number']}/comments",
             "POST",
-            {"body": text},
+            {"body": marker + "\n" + body},
         )
         record = {"id": comment["id"]}
-    replies[key] = {"id": record["id"], "body": text}
-    return f"https://github.com/{state['repo']}/issues/{state['task']['number']}#issuecomment-{record['id']}"
+    url = f"https://github.com/{state['repo']}/issues/{state['task']['number']}#issuecomment-{record['id']}"
+    state["timeline_sequence"] = sequence
+    state["last_timeline_event"] = {"signature": signature, "url": url}
+    return url
