@@ -694,6 +694,7 @@ def run_agent(source, session, state, stage):
     artifact = gate["artifact"]
     path = relative_file(workspace, artifact)
     state["completed"][stage] = {
+        "run_id": state.get("run_id"),
         "artifact": artifact,
         "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "summary": result["summary"],
@@ -913,42 +914,16 @@ def report(session, state):
         + "/actions/runs/"
         + str(state.get("run_id", ""))
     )
-    rows = [
-        "<!-- harness-full -->",
-        "### 完整研发流程",
-        "#" + str(state["task"]["number"]) + " · " + state["status"],
-        "| 阶段 | 状态 | 产物 / 说明 |",
-        "|---|---|---|",
-    ]
-    for stage in STAGES[:3]:
-        done = state["completed"].get(stage)
-        status = (
-            (
-                {"reuse": "复用已有产物", "not_applicable": "无需执行"}.get(
-                    done.get("mode"), "已检查"
-                )
-            )
-            if done
-            else (state["status"] if stage == state["stage"] else "尚未完成")
-        )
-        if stage in STAGES[:2] and stage in state.get("approvals", {}):
-            status = "人工已确认"
-        elif stage in STAGES[:2] and done:
-            status = "等待人工确认"
-        elif stage == "development" and state["stage"] in STAGES[2:]:
-            status = state["status"] + " · " + state["stage"]
-        detail = (done or {}).get("artifact") or (done or {}).get("summary", "")
-        rows.append(
-            "| "
-            + stage
-            + " | "
-            + status
-            + " | "
-            + str(detail).replace("|", "/").replace("\n", " ")[:600]
-            + " |"
-        )
+    from full_harness.progress import NAMES, progress_rows
+
+    rows = progress_rows(state)
     if state.get("routing"):
-        rows += ["", "**入口判别：** " + state["routing"]["summary"]]
+        rows += [
+            "",
+            "<details><summary>入口判断依据（展开查看）</summary>",
+            "",
+            state["routing"]["summary"],
+        ]
         for item in state["routing"].get("decisions", []):
             rows += [
                 "- "
@@ -960,6 +935,7 @@ def report(session, state):
                 + "；依据："
                 + ", ".join(item["evidence"])
             ]
+        rows += ["", "</details>"]
     public_files = {}
     for stage in STAGES[:3]:
         done = state["completed"].get(stage, {})
@@ -984,21 +960,25 @@ def report(session, state):
                     content = "```" + path.suffix[1:] + "\n" + content + "\n```"
                 rows += [
                     "",
-                    "<details><summary>" + stage + " · " + name + "</summary>",
+                    "<details><summary>📄 "
+                    + NAMES[stage]
+                    + "产物（点击展开） · "
+                    + name
+                    + "</summary>",
                     "",
                     content,
                     "",
                     "</details>",
                 ]
-    if state.get("reason"):
-        rows += ["", state["reason"][:8000]]
     if state.get("last_reply"):
         rows += ["", "### Agent 回复", "", state["last_reply"]]
     if state.get("reply_token") or state["status"] == "paused":
         rows += ["", "直接评论即可提问、补充需求、要求修改或恢复，无需命令和 ID。"]
         if state["status"] == "awaiting_approval":
             rows += [
-                "确认当前版本时请明确回复，例如：**这版需求确认通过，继续下一阶段。**"
+                "确认当前版本时请明确回复，例如：**这版"
+                + NAMES.get(state["stage"], "产物")
+                + "确认通过，继续下一阶段。**"
             ]
     if state.get("pr_url"):
         rows += ["", "交付 PR：" + state["pr_url"]]
@@ -1147,6 +1127,10 @@ def main():
             ):
                 assess_entry(source, session, state)
             if state["status"] == "running" and not conversation_only:
+                if args.stage in STAGES[:3]:
+                    state.setdefault("stage_runs", {})[args.stage] = state["run_id"]
+                    write_json(state_path, state)
+                    report(session, state)
                 if args.stage in STAGES[:2] and args.stage == state["stage"]:
                     run_agent(source, session, state, args.stage)
                 elif args.stage == "development" and state["stage"] in STAGES[2:]:
