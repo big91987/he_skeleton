@@ -17,8 +17,12 @@ class TimelineTests(unittest.TestCase):
             "run_id": "1",
             "stage": "requirements",
         }
-        first = publish(api, state, "PRD")
-        self.assertEqual(publish(api, state, "PRD"), first)
+        first = publish(api, state, "[PRD](<private-runtime>/workspace/prd.md)")
+        self.assertNotIn("(<private-runtime>", api.call_args.args[3]["body"])
+        self.assertIn("PRD（见下方产物）", api.call_args.args[3]["body"])
+        self.assertEqual(
+            publish(api, state, "[PRD](<private-runtime>/workspace/prd.md)"), first
+        )
         publish(api, state, "PRD ready")
         state.update(run_id="2", stage="design")
         second = publish(api, state, "Design after confirmation")
