@@ -235,8 +235,32 @@ class ApprovalTests(unittest.TestCase):
         self.assertIn("contract.json", text)
         self.assertTrue((self.root / "public/design/contract.json").is_file())
 
+    def test_running_checkpoints_are_private(self):
+        with patch.object(runner, "api") as api:
+            runner.report(self.root, self.state)
+            self.state["turn"] += 1
+            runner.report(self.root, self.state)
+        api.assert_not_called()
+        self.assertTrue((self.root / "public/status.md").exists())
+
+    def test_confirmation_prints_actual_result_without_update_wrapper(self):
+        runner.request_approval(self.root, self.state, "requirements")
+        self.state["last_reply"] = "Stale acknowledgement"
+        with patch.object(runner, "api", return_value={"id": 100}) as api:
+            runner.report(self.root, self.state)
+            runner.report(self.root, self.state)
+        posts = [
+            c.args[3]["body"] for c in api.call_args_list if c.args[2:3] == ("POST",)
+        ]
+        self.assertEqual(len(posts), 1)
+        self.assertIn("PRD ready", posts[0])
+        self.assertNotIn("阶段更新", posts[0])
+        self.assertNotIn("Stale acknowledgement", posts[0])
+
     def test_reporting_never_edits_existing_issue_history(self):
         self.state["comment_id"] = 777
+        self.state["status"] = "needs_input"
+        self.state["conversation"] = [{"turn": 0, "intent": "answer"}]
         self.state["last_reply"] = "Initial answer"
         with patch.object(runner, "api", return_value={"id": 100}) as api:
             runner.report(self.root, self.state)
