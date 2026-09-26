@@ -232,6 +232,7 @@ def handle_message(source, session, state, instruction, event, sha, runner, run_
     )
     state.setdefault("conversation", []).append(
         {
+            "turn": state["turn"],
             "message": instruction,
             "reply": state["last_reply"],
             "intent": result["intent"],
@@ -930,7 +931,7 @@ def report(session, state):
         + "/actions/runs/"
         + str(state.get("run_id", ""))
     )
-    from full_harness.progress import NAMES, STATUSES, progress_rows
+    from full_harness.progress import NAMES, progress_rows
 
     rows = progress_rows(state)
     if state.get("routing"):
@@ -1029,33 +1030,31 @@ def report(session, state):
         if state["stage"] in STAGES[2:]
         else "entry"
     )
-    title = NAMES.get(stage, "任务受理")
-    reply_rows = [
-        "### " + title + "阶段更新",
-        "",
-        "[任务记录](https://github.com/"
-        + state["repo"]
-        + "/issues/"
-        + str(state["task"]["number"])
-        + ")",
-        "",
-    ]
-    if state.get("last_reply"):
-        reply_rows += ["**Agent 回复：**", state["last_reply"], ""]
-    reply_rows += [
-        "**当前状态：** " + STATUSES.get(state["status"], state["status"]),
-        "",
-        state.get("reason", "正在处理本阶段；后续结果将按时间顺序另发回复。"),
-    ]
-    reply_rows += stage_documents.get(stage, [])
-    if state["status"] == "awaiting_approval":
-        reply_rows += [
-            "",
-            "审阅上方产物后，直接评论“这版"
-            + title
-            + "确认通过，继续下一阶段”，或提出修改意见。",
-        ]
-    reply_rows += ["", "[阶段运行日志及下载包](" + run_url + ")"]
+    conversation = state.get("conversation", [])
+    dialogue = (
+        bool(conversation)
+        and conversation[-1].get("turn") == state.get("turn")
+        and conversation[-1]["intent"] == "answer"
+        and state["status"] != "blocked"
+    )
+    # Checkpoints still produce downloadable evidence, but never empty Issue updates.
+    if state["status"] == "running" and not dialogue:
+        return
+    if dialogue:
+        message = state.get("last_reply", "")
+    elif state["status"] == "awaiting_approval":
+        message = state["completed"].get(stage, {}).get("summary", "")
+    else:
+        message = state.get("reason", "")
+    reply_rows = [message] if message else []
+    if not dialogue and state["status"] == "awaiting_approval":
+        reply_rows += stage_documents.get(stage, [])
+        reply_rows += ["", "请确认以上产物，或直接提出修改意见。"]
+    if not dialogue and state.get("pr_url"):
+        reply_rows += ["", "交付 PR：" + state["pr_url"]]
+    if not reply_rows:
+        return
+    reply_rows += ["", "[运行日志及产物下载](" + run_url + ")"]
     reply_body = "\n".join(reply_rows)
     for private_path in [str(session), str(Path.home())]:
         reply_body = reply_body.replace(private_path, "<private-runtime>")
