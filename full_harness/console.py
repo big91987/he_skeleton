@@ -11,7 +11,8 @@ def safe(value):
 
 
 class Console:
-    def __init__(self):
+    def __init__(self, on_event=None):
+        self.on_event = on_event
         self.actions = os.environ.get("GITHUB_ACTIONS") == "true"
         self.pending = ""
 
@@ -70,6 +71,8 @@ class Console:
             self.item(item)
         elif kind not in {"item.started", "item.updated"}:
             self.group("其他运行事件：" + kind, line)
+        if self.on_event:
+            self.on_event(event)
 
     def item(self, item):
         kind = item.get("type")

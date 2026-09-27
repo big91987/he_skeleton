@@ -76,6 +76,7 @@ def invoke(
     skills=None,
     read_only=False,
     hook_script="stop_hook.py",
+    on_event=None,
 ):
     if (workspace / ".codex").exists():
         raise ValueError(
@@ -144,7 +145,9 @@ def invoke(
     console.text("会话：" + ("恢复已有 Session" if session_id else "新建 Session"))
     code = None
     try:
-        code = run_process(argv, workspace, env, log, timeout, prompt, stream=True)
+        code = run_process(
+            argv, workspace, env, log, timeout, prompt, stream=True, on_event=on_event
+        )
     finally:
         ids = []
         if log.exists():

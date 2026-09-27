@@ -119,10 +119,10 @@ def clean_env():
     }
 
 
-def stream_log(log, done):
+def stream_log(log, done, on_event=None):
     # Tail the retained file rather than pipe stdout: console forwarding must
     # not change process timeouts, stdin handling or the durable raw evidence.
-    console = Console()
+    console = Console(on_event=on_event)
     with Path(log).open(errors="replace") as reader:
         while True:
             line = reader.readline()
@@ -138,7 +138,9 @@ def stream_log(log, done):
                 done.wait(0.1)
 
 
-def run_process(argv, cwd, env, log, timeout, prompt=None, *, stream=False):
+def run_process(
+    argv, cwd, env, log, timeout, prompt=None, *, stream=False, on_event=None
+):
     with Path(log).open("w") as output:
         p = subprocess.Popen(
             argv,
@@ -152,7 +154,7 @@ def run_process(argv, cwd, env, log, timeout, prompt=None, *, stream=False):
         )
         done = threading.Event()
         tail = (
-            threading.Thread(target=stream_log, args=(log, done), daemon=True)
+            threading.Thread(target=stream_log, args=(log, done, on_event), daemon=True)
             if stream
             else None
         )
@@ -174,7 +176,8 @@ def run_process(argv, cwd, env, log, timeout, prompt=None, *, stream=False):
         finally:
             done.set()
             if tail:
-                tail.join(timeout=2)
+                # Finish comment delivery before the caller updates the checkpoint.
+                tail.join(timeout=None if on_event else 2)
     return p.returncode
 
 
