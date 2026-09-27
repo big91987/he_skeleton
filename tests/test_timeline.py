@@ -1,4 +1,6 @@
 import html
+import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -130,6 +132,10 @@ class TimelineTests(unittest.TestCase):
 
             self.assertIn('"type": "item.completed"', html.unescape(patches[-1]))
             self.assertIn("执行中", patches[-1])
+            raw = json.loads(
+                html.unescape(re.search(r"<pre>(.*?)</pre>", patches[-1], re.S)[1])
+            )
+            self.assertEqual([e["item"]["id"] for e in raw], ["one", "two"])
             complete = {"type": "turn.completed", "usage": {"output_tokens": 3}}
             resumed(complete)
             self.assertEqual(resumed.record["execution_event"], complete)
@@ -140,3 +146,55 @@ class TimelineTests(unittest.TestCase):
             self.assertIn("执行失败", patches[-1])
             self.assertEqual(resumed.record["execution_event"], complete)
             self.assertEqual(len(posts), 1)
+
+    def test_large_progress_keeps_all_events_across_bounded_comments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            comments = {}
+
+            def api(repo, target, method="GET", data=None):
+                if method == "GET":
+                    return [
+                        {"id": i, "user": {"type": "Bot"}, "body": b}
+                        for i, b in comments.items()
+                    ]
+                number = (
+                    len(comments) + 1
+                    if method == "POST"
+                    else int(target.rsplit("/", 1)[1])
+                )
+                comments[number] = data["body"]
+                return {"id": number}
+
+            path = Path(directory) / "progress.json"
+            replies = AgentReplies(api, self.state, path)
+            events = []
+            for text in ("第一条<&>" * 3000, "第二条甲乙丙" * 3000):
+                event = {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "same-id",
+                        "type": "agent_message",
+                        "phase": "commentary",
+                        "text": text,
+                    },
+                }
+                events.append(event)
+                replies(event)
+            self.assertGreater(len(comments), 1)
+            self.assertTrue(
+                all(len(b.encode("utf-8")) < 60000 for b in comments.values())
+            )
+            raw = "".join(
+                html.unescape(m[1])
+                for b in comments.values()
+                if (m := re.search(r"<pre>(.*?)</pre>", b, re.S))
+            )
+            self.assertEqual(json.loads(raw), events)
+            self.assertEqual(
+                list(replies.record["messages"].values()),
+                [e["item"]["text"] for e in events],
+            )
+            count = len(comments)
+            AgentReplies(api, self.state, path).finish(True)
+            self.assertEqual(len(comments), count)
+            self.assertTrue(all("本轮已结束" in b for b in comments.values()))
