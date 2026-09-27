@@ -247,6 +247,34 @@ def report(session, state, error=None):
     public = Path(os.environ["LIGHT_PUBLIC"])
     public.mkdir(parents=True, exist_ok=True)
     body = error or state["reply"]
+    evidence = session / "turns" / str(state["turn"])
+    context_path = evidence / "context.json"
+    before = (
+        read_json(context_path)["state"]["stage"]
+        if context_path.exists()
+        else state["stage"]
+    )
+    body += f"\n\n本轮阶段（开始 → 已保存）：`{before} → {state['stage']}`"
+    # Read the actual current-turn output, including a proposal rejected by checks.
+    # Never reconstruct it from the checkpoint or fall back to an earlier turn.
+    try:
+        raw = read_json(evidence / "agent/result.json")
+        if not isinstance(raw, dict):
+            raise ValueError("Agent result is not an object")
+        fields = {key: value for key, value in raw.items() if key != "message"}
+        rendered = json.dumps(fields, ensure_ascii=False, indent=2)
+        rendered = rendered.replace(str(session), "<private-runtime>").replace(
+            str(Path.home()), "<private-runtime>"
+        )
+        (public / "agent-fields.json").write_text(rendered + "\n")
+        body += (
+            "\n\n<details><summary>Agent 原始输出（除 message）</summary>\n\n<pre>"
+            + html.escape(rendered)
+            + "</pre>\n\nnext_state 是 Agent 返回值；上方阶段是框架实际保存值。\n\n</details>"
+        )
+    except (OSError, ValueError):
+        (public / "agent-fields.json").unlink(missing_ok=True)
+        body += "\n\n本轮未取得可解析的 Agent 结构化输出。"
     for name in [] if error else state.get("artifacts", []):
         path = relative_file(session / "workspace", name)
         if not path.is_file():

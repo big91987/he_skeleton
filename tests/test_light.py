@@ -408,3 +408,69 @@ class LightTests(unittest.TestCase):
             light.report(self.session, self.state, error="PR 发送失败")
         self.assertEqual(self.state["reply"], "研发完成")
         self.assertIn("PR 发送失败", (self.session / "public/reply.md").read_text())
+
+    def test_report_shows_actual_output_and_checkpoint_without_another_model(self):
+        import html
+        import json
+        import os
+
+        self.state.update(
+            stage="design", turn=2, reply="设计完成", run_id="10", artifacts=[]
+        )
+        turn = self.session / "turns/2"
+        write_json(turn / "context.json", {"state": {"stage": "requirements"}})
+        raw = result(next_state="design", message="设计完成", artifacts=[])
+        write_json(turn / "agent/result.json", raw)
+        with (
+            patch.dict(os.environ, {"LIGHT_PUBLIC": str(self.session / "public")}),
+            patch.object(light, "publish", return_value="url"),
+            patch.object(light, "invoke", side_effect=AssertionError("extra model")),
+        ):
+            light.report(self.session, self.state)
+        body = html.unescape((self.session / "public/reply.md").read_text())
+        self.assertIn("requirements → design", body)
+        self.assertIn('"next_state": "design"', body)
+        self.assertIn('"artifacts": []', body)
+        self.assertNotIn('"message":', body)
+        self.assertEqual(
+            json.loads((self.session / "public/agent-fields.json").read_text()),
+            {"next_state": "design", "artifacts": []},
+        )
+
+    def test_rejected_result_shows_proposal_separately_from_saved_stage(self):
+        import html
+        import os
+
+        self.state.update(
+            stage="requirements", turn=2, reply="原回复", run_id="10", artifacts=[]
+        )
+        turn = self.session / "turns/2"
+        write_json(turn / "context.json", {"state": {"stage": "requirements"}})
+        write_json(turn / "agent/result.json", result(next_state="done"))
+        with (
+            patch.dict(os.environ, {"LIGHT_PUBLIC": str(self.session / "public")}),
+            patch.object(light, "publish", return_value="url"),
+        ):
+            light.report(self.session, self.state, error="校验未通过")
+        body = html.unescape((self.session / "public/reply.md").read_text())
+        self.assertIn("requirements → requirements", body)
+        self.assertIn('"next_state": "done"', body)
+        self.assertEqual(self.state["stage"], "requirements")
+
+    def test_failed_turn_does_not_show_previous_turn_output(self):
+        import os
+
+        self.state.update(
+            stage="requirements", turn=2, reply="原回复", run_id="10", artifacts=[]
+        )
+        write_json(
+            self.session / "turns/1/agent/result.json", result(next_state="design")
+        )
+        with (
+            patch.dict(os.environ, {"LIGHT_PUBLIC": str(self.session / "public")}),
+            patch.object(light, "publish", return_value="url"),
+        ):
+            light.report(self.session, self.state, error="连接失败")
+        body = (self.session / "public/reply.md").read_text()
+        self.assertIn("本轮未取得可解析的 Agent 结构化输出", body)
+        self.assertNotIn("next_state", body)
