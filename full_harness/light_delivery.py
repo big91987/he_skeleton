@@ -7,7 +7,9 @@ from full_harness.runner import publish_changes
 
 def deliver(session, state):
     workspace = session / "workspace"
-    gate = read_json(session / "turns" / str(state["turn"]) / "gate.json")
+    gate = read_json(
+        session / "turns" / str(state["verification"]["turn"]) / "gate.json"
+    )
     if gate.get("status") != "passed" or gate.get("snapshot") != digest(workspace):
         raise ValueError("验证记录与交付文件不匹配")
     for approval in state.get("approvals", {}).values():
