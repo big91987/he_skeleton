@@ -30,7 +30,10 @@ SCHEMA = copy.deepcopy(RESULT_SCHEMA)
 SCHEMA["properties"].update(
     {
         "stage": {"type": "string", "enum": STAGES},
-        "awaiting_approval": {"type": "boolean"},
+        "awaiting_approval": {
+            "type": "boolean",
+            "description": "True only when THIS reply submits documents for human review. False for ordinary answers; pending review is retained automatically.",
+        },
         "delivered": {"type": "boolean"},
         "approval_quote": {
             "type": "string",
@@ -134,7 +137,9 @@ def apply_result(session, state, result, message, sent):
             unchanged = False
         if not unchanged:
             state.pop("pending", None)
-    if result["awaiting_approval"]:
+    if result["awaiting_approval"] and (
+        not state.get("pending") or state["pending"]["files"] != material
+    ):
         state["pending"] = {
             "stage": result["stage"],
             "files": material,
@@ -174,8 +179,9 @@ def prompt(state, message):
         "研发完毕生成配置指定的验证记录，并返回 delivered=true，原生 Stop Hook 会运行真实项目检查，失败会让你在同一次执行内继续修复。"
         "普通问答 delivered=false，不运行开发检查。缺用户决定时提问；环境卡住如实报告 blocked；不要为了等确认捏造澄清问题。"
         "不得修改执行规则、伪造验证、绕过产品入口、修改已确认文档后沿用旧批准。需要修改基线时回到对应阶段重新确认。"
-        "审批事实留在结构化结果，不写进 PRD 正文。summary/question 是直接给用户看的原话，明确说做了什么及下一步需要什么。"
-        "仅关键节点在 artifacts 列出实际文件相对路径；不要把内部 state、日志或凭证当产物。"
+        "即使 Skill 建议状态，也不要把 Pending User Approval、Ready for Architecture 等审批状态写入 PRD/设计正文或要求批准后修改文档状态。审批事实留在结构化结果。summary/question 是直接给用户看的原话，明确说做了什么及下一步需要什么。"
+        "普通问答使用 artifacts=[]、awaiting_approval=false；这不会撤销已有待审记录，不要因为仍在等确认就再次附上未变化文档。"
+        "仅提交新产物、修改后再次请审或用户明确要求看文档时，在 artifacts 列出实际文件相对路径；不要把内部 state、日志或凭证当产物。"
         "最终结果遵循 schema。当前为轻量模板，旧完整模板的只读意图调用、控制器审批登记和额外独立模型评审流程不适用。\n"
         + json.dumps(packet, ensure_ascii=False, indent=2)
     )

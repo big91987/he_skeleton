@@ -270,3 +270,10 @@ class LightTests(unittest.TestCase):
                 "",
                 None,
             )
+
+    def test_repeated_pending_version_keeps_original_confirmation_time(self):
+        first = result(artifacts=["prd.md"], awaiting_approval=True)
+        light.apply_result(self.session, self.state, first, "", None)
+        original = self.state["pending"]["requested_at"]
+        light.apply_result(self.session, self.state, first, "解释一下", None)
+        self.assertEqual(self.state["pending"]["requested_at"], original)
