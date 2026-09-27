@@ -16,3 +16,19 @@ Keep this experiment minimal and tool-neutral.
 Use Ruff with 4-space indentation, double quotes, 88-character target line width, and the shared `full_harness/ruff.toml` rules. After editing product Python code, run `python3 full_harness/quality.py fix`, repair remaining errors, then run `python3 full_harness/quality.py check`. The Stop Hook and verification stage run read-only checks independently. Formatting and lint never replace functional tests. Do not weaken quality rules to pass a task. Install the pinned tool using `python3 -m pip install -r full_harness/requirements.txt` in the Runner environment.
 
 For this toolbox itself, run `ruff check --fix .`, `ruff format .`, `ruff format --check .`, and `ruff check .`. CI enforces the same rules and runs the regression suite.
+
+## 测试维护规则
+
+测试以保护真实行为和降低维护成本为目标，不以测试数量或覆盖率数字为目标。
+
+- 新增测试前，先说明它要拦住的具体故障，并检查现有测试。相同责任优先扩展或合并已有场景，不为每次改动机械追加用例。
+- 优先通过真实入口和可观察结果验证行为。状态恢复应实际读写检查点；不要只给状态赋值再断言原值，也不要把内部步骤全部 mock 后只检查调用顺序。
+- GitHub、Codex 等外部接口可以使用夹具，但必须说明验证边界。固定模型输出只能验证框架如何处理结果，不能证明 Agent 能正确理解自然语言。
+- 不锁定无业务意义的内部结构、提示词措辞或展示文案。可逆、低影响的改动不强制新增测试；不得通过搬进一个大测试或移出默认执行范围来假装精简。
+- 修改流程时同步清理重复、过时和脱离实际调用链的测试，更新失真的测试名称。旧模板仍提供使用时保留必要兼容测试；下线时连同实现、入口和测试一起清理。
+- 保留有明确风险依据的保护：权限、路径隔离、Session 接续、重复事件、陈旧确认、校验失败不能交付。不能为了减少数量删除这些保护。
+- 使用最小必要的测试夹具和运行方式，不为测试再堆一套框架。验证通过后，只有新改动、失败或未解决疑点才扩大或重复测试；避免重复 CI 触发。
+- 测试失败必须返回失败，不能提前退出后假绿。成功时收起预期错误日志，失败时保留诊断信息；真实模型探针保持显式启用。
+- 汇报实际覆盖范围、跳过项和未验证项，区分离线回归、原生模型探针与产品验收。不得把测试条数当作生产可用的证明。
+
+测试范围及删减依据维护在 [tests/README.md](tests/README.md)。调整测试集时同步更新，避免实现与清单漂移。
