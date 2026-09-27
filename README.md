@@ -8,6 +8,36 @@ Workflow 和 Issue 表单由模板首次复制，之后归业务仓库 Owner 维
 
 用 GitHub Issue／PR 提交研发任务，本机 Agent 读取完整项目上下文并交付代码或文档。产品类型和技术栈由用户与项目决定。验证方式由项目选择；未配置可执行验证器时明确标记“待验证”，不强行生成网页，也不宣称通过验收。详见 [项目配置](docs/project-configuration.md)。
 
+## 新增：独立完整研发流程
+
+新增的 **Full development workflow** 与下文原流程并存。入口为 `/develop`、`harness-full` 标签或手动执行；使用原生 Codex Session 续接，按需求、设计、规划、实现、独立评审、交付分阶段展示。原 `/harness` 流程未改动。
+
+- [完整搭建、使用与限制](templates/full/docs/harness-full.md)
+- [可由项目 Owner 修改的 Workflow 模板](templates/full/.github/workflows/harness-full.yml)
+- [项目路径与检查配置](templates/full/.harness/full.json)
+- [固定版本安装脚本](scripts/install_full.py)
+- [阶段运行器](full_harness/runner.py) · [Codex Session 适配](full_harness/codex.py) · [原生 Stop Hook](full_harness/stop_hook.py)
+
+```mermaid
+flowchart LR
+  I[Issue /develop 或手动运行] --> E[读取项目材料并判别入口]
+  E --> R[按需：需求与 AC]
+  E -- 已有代码 --> CHECK[真实验证]
+  CHECK --> V
+  R --> D[设计]
+  D --> P[任务拆解]
+  P --> C[实现]
+  C --> H[Stop Hook 真实检查]
+  H -- 失败：原 Session 整改 --> C
+  H --> V[独立 Session 评审]
+  V -- 缺陷：退回相应阶段 --> D
+  V --> PR[创建待审 PR]
+  R -. 需要用户决定 .-> Q[Issue 展示问题和阶段产物]
+  Q -. 带回复标识继续原 Session .-> R
+```
+
+所有阶段都能暂停澄清；图中只画出一条示例。需求、设计和规划各有独立文档评审。默认不部署网站，验证命令必须由项目配置。当前仅支持同一持久化本地 Runner；云端状态存储尚未实现。以下内容说明原有 Workflow。
+
 ## 怎么试
 
 1. 仓库所有者打开 **Issues → New issue → 交给 Agent 处理研发任务**，描述需求。带 `harness` 标签的新 Issue 自动开始。默认先只读澄清；模板选择“直接实施”可跳过首轮确认。
@@ -63,13 +93,24 @@ Session 独立于进程和 Job。第一版用持久化任务历史＋工作区�
 
 ## 运维与验证
 
+测试范围、删减依据和运行方式见 [测试维护清单](tests/README.md)。离线脚本回归不能代替真实 Agent 和产品验收。
+
 在 Runner 的 `runtime/` 目录执行 `./svc.sh status`、`./svc.sh stop` 或 `./svc.sh start`。Mac 需保持开机、联网，才能接新任务。
 
 ```sh
-python3 -m unittest discover -s tests -v
+python3 -m unittest discover -s tests -b
 node --check harness/browser.cjs
 ```
 
 依赖：Python 3、Node、已登录的 Codex CLI（本机验证版本 0.151.0）、Runner 2.337.0；`tools/` 安装 Playwright 1.58.2 和对应 Chromium。Pages 设置为 GitHub Actions 发布。不启用 Actions 审批 PR 的额外权限。
 
 Runner 连通验证：[实际通过的运行](https://github.com/big91987/he_skeleton/actions/runs/35201703061)。完整链路以实验 Issue 中的实际运行、预览和反馈记录为准。
+
+## Light conversation template
+
+For separate requirements, design and development Jobs sharing one native Session,
+without an extra intent-classifier call, install with
+`python3 scripts/install_light.py <product-checkout> --ref <commit>` (ref defaults to HEAD).
+The independent template is in `templates/light/`; the existing full template remains available.
+See [behavior, setup and limitations](templates/light/docs/harness-light.md).
+Enable only one automatic Issue workflow, or separate their triggers explicitly.

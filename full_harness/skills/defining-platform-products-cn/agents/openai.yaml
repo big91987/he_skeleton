@@ -1,0 +1,4 @@
+interface:
+  display_name: "平台产品需求定义"
+  short_description: "把平台需求收口成可进入架构设计的广义 PRD 基线"
+  default_prompt: "使用 $defining-platform-products-cn 梳理这个平台产品的需求、业务架构、范围和验收基线。"

@@ -1,9 +1,5 @@
 name: Harness task
 on:
-  issues:
-    types: [opened]
-  issue_comment:
-    types: [created]
   workflow_dispatch:
     inputs:
       task:

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Resumable Batch Grilling"
+  short_description: "Run durable batch interviews without repeated questions"
+  default_prompt: "Use $resumable-batch-grilling to resume and continue this decision interview from its durable ledger."
+policy:
+  allow_implicit_invocation: false

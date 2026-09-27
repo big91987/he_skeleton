@@ -1,0 +1,6 @@
+interface:
+  display_name: "Strict Resumable Batch Grilling"
+  short_description: "Rigorous dependency-safe batches with durable state"
+  default_prompt: "Use $strict-resumable-grilling to challenge this plan in rigorous dependency-safe batches and preserve a durable checkpoint."
+policy:
+  allow_implicit_invocation: true

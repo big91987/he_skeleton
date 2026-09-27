@@ -1,0 +1,68 @@
+{
+  "version": 2,
+  "entries": [
+    "AGENTS.md",
+    "docs/README.md",
+    "docs/00-global/project.md"
+  ],
+  "stages": {
+    "entry": {
+      "instruction": "读取实际需求、文档和代码，判断阶段缺口和可复用依据；不能批准跳过验证或评审。",
+      "skills": []
+    },
+    "requirements": {
+      "skills": [
+        "resumable-batch-grilling",
+        "defining-platform-products-cn"
+      ],
+      "artifact": "docs/04-implementation/tasks/{task}/prd.md",
+      "instruction": "遵循 AGENTS.md 的阶段产物约定和当前阶段 Skill；读取其规定的参考与输出契约，使用已确认的上游产物。",
+      "inputs": [
+        "docs/00-global/project.md"
+      ],
+      "review_skills": [
+        "reviewing-design-and-plans-cn"
+      ]
+    },
+    "design": {
+      "skills": [
+        "platform-architecture-v2-cn",
+        "reviewing-design-and-plans-cn"
+      ],
+      "artifact": "docs/04-implementation/tasks/{task}/design/README.md",
+      "instruction": "遵循 AGENTS.md 的阶段产物约定和当前阶段 Skill；读取其规定的参考与输出契约，使用已确认的上游产物。",
+      "inputs": [
+        "docs/04-implementation/tasks/{task}/prd.md"
+      ],
+      "review_skills": [
+        "reviewing-design-and-plans-cn"
+      ]
+    },
+    "development": {
+      "skills": [
+        "managing-engineering-delivery-cn",
+        "trellis-before-dev",
+        "trellis-check",
+        "trellis-update-spec"
+      ],
+      "artifact": "docs/05-validation/tasks/{task}/validation.md",
+      "instruction": "遵循 AGENTS.md 的阶段产物约定和当前阶段 Skill；读取其规定的参考与输出契约，使用已确认的上游产物。",
+      "inputs": [
+        "docs/04-implementation/tasks/{task}/prd.md",
+        "docs/04-implementation/tasks/{task}/design/README.md"
+      ],
+      "review_skills": []
+    },
+    "review": {
+      "instruction": "独立核对需求、设计、代码和验证证据，审查完整用户路径、兼容性与可维护性。",
+      "skills": [
+        "trellis-check"
+      ]
+    }
+  },
+  "checks": [],
+  "max_attempts": 3,
+  "agent_timeout": 1200,
+  "check_timeout": 120,
+  "review_timeout": 480
+}
