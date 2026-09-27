@@ -74,12 +74,24 @@ class AgentReplies:
         self.pending = None
 
     def __call__(self, event):
+        kind = event.get("type")
+        if kind in {"turn.started", "turn.completed", "turn.failed", "error"}:
+            self.record["execution_event"] = event
+            self.record["execution_status"] = {
+                "turn.started": "执行中",
+                "turn.completed": "本轮输出已结束",
+                "turn.failed": "执行失败",
+                "error": "发生错误，等待执行结果",
+            }[kind]
+            if self.record.get("comment_id"):
+                self.update()
+            return
         item = event.get("item") or {}
         if not isinstance(item, dict):
             return
-        kind = event.get("type")
         if kind == "item.completed" and item.get("type") == "agent_message":
             self.flush()
+            self.record["message_event"] = event
             text = item.get("text", "")
             try:
                 value = json.loads(text)
@@ -107,18 +119,46 @@ class AgentReplies:
         for path in self.private_paths:
             text = text.replace(str(path), "<private-runtime>")
         self.record["messages"][item_id] = text
+        self.update()
+
+    def finish(self, success):
+        # Process outcome is separate from native event JSON; never invent a
+        # turn.completed event when Codex timed out or exited without one.
+        self.record["execution_status"] = "本轮已结束" if success else "执行失败"
+        if self.record["messages"]:
+            self.update()
+
+    def update(self):
         marker = f"<!-- harness-event:progress:{self.state['run_id']}:{self.state['turn']} -->"
         history = "\n\n---\n\n".join(
             html.escape(message, quote=False)
             for message in self.record["messages"].values()
         )
-        if len(history) > 50000:
-            history = "更早进展见运行日志。\n\n" + history[-50000:]
-        latest = html.escape(text.strip().splitlines()[0][:140])
+        if len(history) > 30000:
+            history = "更早进展见运行日志。\n\n" + history[-30000:]
+        text = next(reversed(self.record["messages"].values()), "")
+        latest = html.escape(text.strip().splitlines()[0][:140]) if text else ""
+        events = [
+            self.record[k]
+            for k in ("message_event", "execution_event")
+            if k in self.record
+        ]
+        raw = json.dumps(events, ensure_ascii=False, indent=2)
+        for path in self.private_paths:
+            raw = raw.replace(str(path), "<private-runtime>")
+        raw_block = (
+            "<details><summary>最近消息与执行事件（完整 JSON）</summary>\n\n<pre>"
+            + html.escape(raw)
+            + "</pre>\n\n</details>"
+            if len(html.escape(raw)) < 20000
+            else "完整事件较长，请查看运行日志及本轮结束后的下载包。"
+        )
+        status = self.record.get("execution_status", "执行中")
         url = f"https://github.com/{self.state['repo']}/actions/runs/{self.state['run_id']}"
         body = (
-            f"{marker}\n<details><summary>Agent 进展 · {latest}</summary>\n\n"
-            f"{history}\n\n</details>\n\n[运行日志]({url})"
+            f"{marker}\n**{status}** · 阶段：`{self.state['stage']}`\n\n"
+            f"<details><summary>Agent 进展 · {latest}</summary>\n\n"
+            f"{history}\n\n</details>\n\n{raw_block}\n\n[运行日志]({url})"
         )
         try:
             write_json(self.path, self.record)

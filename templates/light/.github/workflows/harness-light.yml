@@ -19,6 +19,7 @@ permissions:
 concurrency:
   group: light-development-${{ github.repository }}
   cancel-in-progress: false
+  queue: max
 env:
   FULL_STATE_ROOT: ${{ vars.FULL_STATE_ROOT }}
   NODE_PATH: ${{ vars.FULL_NODE_PATH }}
