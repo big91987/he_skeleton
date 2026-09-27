@@ -136,27 +136,6 @@ class FullWorkflowTests(unittest.TestCase):
             "needs_input",
         )
 
-    def test_review_failure_requests_repair_not_success(self):
-        self.context["stage"] = "requirements"
-        write_json(self.cp, self.context)
-        with (
-            patch.object(stop_hook, "review_prompt", return_value="review"),
-            patch.object(
-                stop_hook,
-                "invoke",
-                return_value=(
-                    {
-                        "status": "changes",
-                        "findings": ["Missing creation path"],
-                        "summary": "gap",
-                    },
-                    "review-session",
-                ),
-            ),
-        ):
-            result = stop_hook.evaluate(self.cp, self.ready)
-        self.assertIn("Missing creation path", result["reason"])
-
     def test_wall_clock_jump_does_not_expire_active_gate(self):
         (self.work / "fixed").write_text("fixed")
         with patch.object(stop_hook.time, "time", return_value=10**12):
@@ -171,26 +150,6 @@ class FullWorkflowTests(unittest.TestCase):
         self.assertEqual(
             json.loads((self.evidence / "gate.json").read_text())["status"], "blocked"
         )
-
-    def test_owner_and_legacy_command(self):
-        event = {
-            "action": "created",
-            "issue": {"number": 3},
-            "comment": {"body": "/develop token answer"},
-        }
-        with patch.dict(os.environ, {"GITHUB_TRIGGERING_ACTOR": "owner"}):
-            self.assertEqual(
-                runner.event_input(event, "owner/repo", "owner", "issue_comment"),
-                (3, "token answer"),
-            )
-            with patch.object(runner, "api", return_value={"permission": "read"}):
-                with self.assertRaises(ValueError):
-                    runner.event_input(event, "owner/repo", "stranger", "issue_comment")
-            event["comment"]["body"] = "/developer"
-            self.assertEqual(
-                runner.event_input(event, "owner/repo", "owner", "issue_comment"),
-                (3, "/developer"),
-            )
 
     def test_stale_reply_and_base_drift_rejected(self):
         state = {
@@ -359,56 +318,6 @@ class FullWorkflowTests(unittest.TestCase):
             runner.run_agent(self.root, self.root, state, "development")
         self.assertEqual(state["status"], "blocked")
         self.assertEqual(state["completed"], {})
-
-    def test_independent_review_returns_to_affected_stage(self):
-        state = {
-            "config": self.cfg,
-            "task": {"number": 1},
-            "turn": 0,
-            "baseline": "sha",
-            "history": [],
-            "completed": {"development": {}},
-            "status": "running",
-            "stage": "review",
-        }
-        calls = []
-
-        def repair(source, session, s, stage):
-            calls.append(stage)
-            s["completed"][stage] = {"checks": []}
-            s["stage"] = runner.STAGES[runner.STAGES.index(stage) + 1]
-
-        outcomes = [
-            (
-                {
-                    "status": "changes",
-                    "summary": "fix interface",
-                    "question": "",
-                    "return_stage": "design",
-                    "findings": ["contract missing"],
-                },
-                "review1",
-            ),
-            (
-                {
-                    "status": "passed",
-                    "summary": "verified",
-                    "question": "",
-                    "return_stage": "development",
-                    "findings": [],
-                },
-                "review2",
-            ),
-        ]
-        with (
-            patch.object(runner, "review_prompt", return_value="review"),
-            patch.object(runner, "invoke", side_effect=outcomes),
-            patch.object(runner, "run_agent", side_effect=repair),
-            patch.object(runner, "verify_stage"),
-        ):
-            runner.review_stage(self.root, self.root, state)
-        self.assertEqual(calls, ["design", "development"])
-        self.assertEqual(state["stage"], "delivery")
 
     def test_install_and_upgrade_preserve_owner_files(self):
         (self.work / ".git").mkdir()

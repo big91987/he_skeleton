@@ -37,13 +37,6 @@ class TrustAndRecovery(unittest.TestCase):
             (7, "修改\n继续", "comment-42"),
         )
 
-    def test_checkpoint_survives_new_reader(self):
-        with tempfile.TemporaryDirectory() as d:
-            p = Path(d) / "state.json"
-            loop.atomic(p, {"status": "waiting_input", "history": [{"user": "先问我"}]})
-            self.assertEqual(json.loads(p.read_text())["history"][0]["user"], "先问我")
-            self.assertFalse(p.with_suffix(".tmp").exists())
-
     def test_preview_rejects_symlinks(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

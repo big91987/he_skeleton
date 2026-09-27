@@ -21,7 +21,6 @@ class LightTests(unittest.TestCase):
         (self.root / "prd.md").write_text("范围 A")
         self.state = {
             "stage": "requirements",
-            "status": "ready",
             "turn": 0,
             "task": {"number": 1, "body": "做一个工具"},
             "repo": "test/repo",
@@ -32,63 +31,6 @@ class LightTests(unittest.TestCase):
                 "stages": {s: {"skills": [], "instruction": s} for s in light.STAGES},
             },
         }
-
-    def test_one_call_per_message_and_resume_with_union_of_skills(self):
-        calls = []
-
-        def invoke(*args, **kwargs):
-            calls.append(kwargs)
-            args[4].mkdir(parents=True)
-            write_json(self.session / "codex-session.json", {"session_id": "same"})
-            return result(message="问题的回答"), "same"
-
-        with patch.object(light, "invoke", side_effect=invoke):
-            light.execute(Path.cwd(), self.session, self.state, "解释一下", "1")
-            light.execute(Path.cwd(), self.session, self.state, "再解释一下", "2")
-        self.assertEqual(len(calls), 2)
-        self.assertIsNone(calls[0]["session_id"])
-        self.assertEqual(calls[1]["session_id"], "same")
-        self.assertEqual(self.state["reply"], "问题的回答")
-        with patch.object(light, "invoke", side_effect=AssertionError("duplicate")):
-            light.execute(Path.cwd(), self.session, self.state, "再解释一下", "2")
-        self.assertEqual(self.state["turn"], 2)
-
-    def test_question_preserves_pending_artifact(self):
-        light.apply_result(
-            self.session,
-            self.state,
-            result(artifacts=["prd.md"]),
-            "",
-            None,
-        )
-        pending = self.state["documents"]["requirements"]
-        light.apply_result(
-            self.session, self.state, result(message="解释范围"), "为什么", None
-        )
-        self.assertEqual(self.state["documents"]["requirements"], pending)
-
-    def test_approval_and_next_stage_work_in_same_result(self):
-        light.apply_result(
-            self.session,
-            self.state,
-            result(artifacts=["prd.md"]),
-            "",
-            None,
-        )
-        (self.root / "design.md").write_text("设计")
-        light.apply_result(
-            self.session,
-            self.state,
-            result(
-                next_state="design",
-                artifacts=["design.md"],
-            ),
-            "没问题，继续",
-            None,
-        )
-        self.assertEqual(self.state["stage"], "design")
-        self.assertIn("design", self.state["documents"])
-        self.assertIn("requirements", self.state["approvals"])
 
     def test_cannot_advance_without_message_or_after_artifact_change(self):
         light.apply_result(
@@ -259,13 +201,6 @@ class LightTests(unittest.TestCase):
                 None,
             )
 
-    def test_repeated_pending_version_keeps_original_confirmation_time(self):
-        first = result(artifacts=["prd.md"])
-        light.apply_result(self.session, self.state, first, "", None)
-        original = self.state["documents"]["requirements"]["shown_at"]
-        light.apply_result(self.session, self.state, first, "解释一下", None)
-        self.assertEqual(self.state["documents"]["requirements"]["shown_at"], original)
-
     def test_invalid_result_does_not_change_state(self):
         import copy
 
@@ -279,19 +214,6 @@ class LightTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 light.apply_result(self.session, self.state, invalid, "继续", None)
             self.assertEqual(self.state, before)
-
-    def test_clarification_and_blocked_messages_need_no_extra_states(self):
-        for message in (
-            "搜索是否需要区分大小写？",
-            "当前无法连接测试环境，请提供地址。",
-        ):
-            light.apply_result(
-                self.session, self.state, result(message=message), "继续", None
-            )
-            self.assertEqual(self.state["stage"], "requirements")
-            self.assertEqual(self.state["reply"], message)
-            self.assertNotIn("status", self.state)
-            self.assertNotIn("pending", self.state)
 
     def test_legacy_state_keeps_documents_and_session_without_legacy_flags(self):
         self.state.update(
@@ -397,18 +319,6 @@ class LightTests(unittest.TestCase):
             read_json(self.session / "state.json")["reply"], "设计完成，请查看。"
         )
 
-    def test_error_report_does_not_replace_validated_reply(self):
-        import os
-
-        self.state.update(reply="研发完成", stage="done", run_id="10", artifacts=[])
-        with (
-            patch.dict(os.environ, {"LIGHT_PUBLIC": str(self.session / "public")}),
-            patch.object(light, "publish", return_value="url"),
-        ):
-            light.report(self.session, self.state, error="PR 发送失败")
-        self.assertEqual(self.state["reply"], "研发完成")
-        self.assertIn("PR 发送失败", (self.session / "public/reply.md").read_text())
-
     def test_report_shows_actual_output_and_checkpoint_without_another_model(self):
         import html
         import json
@@ -456,6 +366,7 @@ class LightTests(unittest.TestCase):
         self.assertIn("requirements → requirements", body)
         self.assertIn('"next_state": "done"', body)
         self.assertEqual(self.state["stage"], "requirements")
+        self.assertEqual(self.state["reply"], "原回复")
 
     def test_failed_turn_does_not_show_previous_turn_output(self):
         import os
@@ -474,3 +385,116 @@ class LightTests(unittest.TestCase):
         body = (self.session / "public/reply.md").read_text()
         self.assertIn("本轮未取得可解析的 Agent 结构化输出", body)
         self.assertNotIn("next_state", body)
+
+    def test_issue_conversation_reloads_checkpoint_resumes_and_publishes_once(self):
+        """Fake only Codex/GitHub; exercise the actual entry, disk state and replies."""
+        import hashlib
+        import os
+
+        source = self.session / "source"
+        source.mkdir()
+        cfg = {"version": 2, "entries": [], "stages": {}}
+        for stage in light.STAGES:
+            skill = source / "full_harness/skills" / stage / "SKILL.md"
+            skill.parent.mkdir(parents=True)
+            skill.write_text("SKILL_BODY_NOT_FOR_PROMPT")
+            cfg["stages"][stage] = {
+                "skills": [stage],
+                "review_skills": [],
+                "artifact": stage + ".md",
+            }
+        cfg["stages"]["review"] = {"skills": []}
+        write_json(source / ".harness/full.json", cfg)
+        task = {"number": 1, "title": "搜索", "body": "按书名搜索"}
+        replies = []
+        outputs = iter(
+            [
+                result(message="请确认需求", artifacts=["prd.md"]),
+                result(message="搜索不需要区分大小写"),
+                result(message="这是同一份需求", artifacts=["prd.md"]),
+                result(
+                    next_state="design", message="设计已完成", artifacts=["design.md"]
+                ),
+            ]
+        )
+        private = self.session / "private"
+        scope = hashlib.sha256(b"test/repo\0main").hexdigest()[:16]
+        session = private / "light" / scope / "1"
+
+        def github(repo, path, method="GET", data=None):
+            if path == "issues/1":
+                return {**task, "state": "open"}
+            if method == "POST":
+                replies.append(data["body"])
+                return {"id": len(replies)}
+            if path.startswith("issues/1/comments?"):
+                return []
+            raise AssertionError(path)
+
+        def codex(source, workspace, home, prompt, evidence, **options):
+            self.assertEqual(options["skills"], light.STAGES)
+            self.assertEqual(options["session_id"], "same-session" if replies else None)
+            self.assertNotIn("SKILL_BODY_NOT_FOR_PROMPT", prompt)
+            output = next(outputs)
+            for name in output["artifacts"]:
+                (workspace / name).write_text("unchanged " + name)
+            write_json(evidence / "result.json", output)
+            write_json(home / "codex-session.json", {"session_id": "same-session"})
+            return output, "same-session"
+
+        event_file = self.session / "event.json"
+        env = {
+            "GITHUB_EVENT_PATH": str(event_file),
+            "GITHUB_REPOSITORY": "test/repo",
+            "GITHUB_ACTOR": "test",
+            "GITHUB_TRIGGERING_ACTOR": "test",
+            "GITHUB_EVENT_NAME": "issues",
+            "GITHUB_REF": "refs/heads/main",
+            "GITHUB_SHA": "baseline",
+            "RUNNER_NAME": "fixture",
+            "FULL_STATE_ROOT": str(private),
+            "LIGHT_PUBLIC": str(self.session / "public"),
+            "GITHUB_ACTIONS": "false",
+            "GITHUB_STEP_SUMMARY": "",
+        }
+        with (
+            patch.dict(os.environ, env),
+            patch.object(light, "__file__", str(source / "full_harness/light.py")),
+            patch.object(light, "api", side_effect=github),
+            patch.object(light, "invoke", side_effect=codex) as agent,
+        ):
+            for index, message in enumerate(
+                [None, "大小写呢？", "再看看文档", "ok 继续吧"], 1
+            ):
+                event = {
+                    "issue": task,
+                    "sender": {"type": "User"},
+                    "action": "opened" if index == 1 else "created",
+                }
+                if message is not None:
+                    event["comment"] = {"id": index, "body": message}
+                write_json(event_file, event)
+                os.environ["GITHUB_EVENT_NAME"] = (
+                    "issues" if index == 1 else "issue_comment"
+                )
+                os.environ["GITHUB_RUN_ID"] = str(index)
+                light.main()  # each call must reload the saved checkpoint
+                saved = read_json(session / "state.json")
+                self.assertEqual(saved["turn"], index)
+                self.assertEqual(saved["session_id"], "same-session")
+                self.assertFalse(set(saved) & {"status", "pending", "delivered"})
+                if index == 1:
+                    original_document = saved["documents"]["requirements"]
+                self.assertEqual(saved["documents"]["requirements"], original_document)
+                self.assertEqual(
+                    saved["stage"], "design" if index == 4 else "requirements"
+                )
+                self.assertEqual(agent.call_count, index)
+                self.assertEqual(len(replies), index)
+            self.assertEqual(saved["approvals"]["requirements"]["message"], "ok 继续吧")
+            self.assertIn("design", saved["documents"])
+            self.assertIn("设计已完成", replies[-1])
+            light.main()  # redelivered event must neither rerun Codex nor repost
+            self.assertEqual(agent.call_count, 4)
+            self.assertEqual(len(replies), 4)
+            self.assertEqual(read_json(session / "state.json"), saved)

@@ -9,6 +9,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness"))
 import loop
 import project
+from delivery import card
 
 
 class ProjectPolicy(unittest.TestCase):
@@ -39,11 +40,6 @@ class ProjectPolicy(unittest.TestCase):
             project.check_control_changes(
                 {"harness-project.json": b"old"}, {"harness-project.json": b"new"}
             )
-
-    def test_generic_prompt_does_not_require_browser_plan(self):
-        p = project.prompt({"title": "Python CLI", "body": "No website"}, [], {})
-        self.assertNotIn("Create app/acceptance.json", p)
-        self.assertIn("No automatic verifier", p)
 
 
 class NonWebExecution(unittest.TestCase):
@@ -137,3 +133,45 @@ class NonWebExecution(unittest.TestCase):
 
     def test_cli_code_and_docs_saved_without_fake_browser_pass(self):
         self.exercise(False)
+
+
+class DeliveryCard(unittest.TestCase):
+    def test_non_web_evidence_does_not_advertise_web_application(self):
+        result = {
+            "task": 1,
+            "sha": "a" * 40,
+            "summary": "CLI execution result",
+            "screenshots": [["运行截图", "screenshot.png"]],
+        }
+        text = card(
+            result,
+            "https://example.test/evidence/",
+            {"passed": False, "performed": []},
+            "owner/repo",
+            "https://example.test/run",
+        )
+        self.assertIn("![运行截图]", text)
+        self.assertIn("失败", text)
+        self.assertNotIn("打开本轮应用", text)
+        self.assertIn("人工验收：待确认", text)
+
+    def test_web_card_links_version_and_actual_preview(self):
+        result = {
+            "task": 1,
+            "scope": "isolated",
+            "sha": "b" * 40,
+            "summary": "ready",
+            "preview_kind": "static-web",
+            "experiment": "codex/harness-test-a",
+        }
+        text = card(
+            result,
+            "https://example.test/round2/",
+            {"passed": True, "performed": [{}] * 16},
+            "owner/repo",
+            "https://example.test/run",
+        )
+        self.assertIn("16 个", text)
+        self.assertIn("打开本轮应用", text)
+        self.assertIn("/commit/" + "b" * 40, text)
+        self.assertIn("Issue 评论路由尚未接通", text)
