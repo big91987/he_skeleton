@@ -17,7 +17,11 @@ RESULT_SCHEMA = {
         "status": {"type": "string", "enum": ["ready", "needs_input", "blocked"]},
         "summary": {"type": "string"},
         "question": {"type": "string"},
-        "artifacts": {"type": "array", "items": {"type": "string"}},
+        "artifacts": {
+            "type": "array",
+            "description": "Existing workspace-relative file paths only; no Markdown links, absolute paths or URLs.",
+            "items": {"type": "string"},
+        },
     },
     "required": ["status", "summary", "question", "artifacts"],
 }

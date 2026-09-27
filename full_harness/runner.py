@@ -321,6 +321,7 @@ def agent_input(state, stage, session):
         "handoff_artifact": spec["artifact"].replace(
             "{task}", str(state["task"]["number"])
         ),
+        "output_format": "artifacts 必须是实际文件的仓库相对路径字符串，例如 docs/design.md；不要写 Markdown 链接、文件说明、绝对路径或 URL。",
         "checks": cfg.get("checks", []),
         "feedback": state.get("feedback", ""),
     }
@@ -604,6 +605,20 @@ def verify_stage(source, session, state, attempt=0):
     state["stage"] = "review"
 
 
+def artifact_name(workspace, value):
+    """Accept display links only when they resolve to a file inside this workspace."""
+    value = value.strip()
+    link = re.fullmatch(r"\[[^\]]*\]\((.*)\)", value)
+    if link:
+        value = link[1].strip().removeprefix("<").removesuffix(">")
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", value):
+        raise ValueError("Artifact must be a project file, not a URL")
+    path = Path(value)
+    if path.is_absolute():
+        value = path.resolve().relative_to(workspace.resolve()).as_posix()
+    return relative_file(workspace, value).relative_to(workspace).as_posix()
+
+
 def run_agent(source, session, state, stage):
     if (
         stage in STAGES[:2]
@@ -703,6 +718,9 @@ def run_agent(source, session, state, stage):
     ) or controls(workspace) != state["controls"]:
         pause(state, "blocked", "Workspace changed after verification")
         return
+    result["artifacts"] = [
+        artifact_name(workspace, name) for name in result.get("artifacts", [])
+    ]
     artifact = (
         gate["artifact"]
         if stage == "development"
