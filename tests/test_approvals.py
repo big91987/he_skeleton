@@ -247,7 +247,7 @@ class ApprovalTests(unittest.TestCase):
             runner.report(self.root, self.state)
         body = api.call_args.args[3]["body"]
         self.assertIn("Search by book title", body)
-        self.assertIn("参考材料", body)
+        self.assertIn("参考资料：", body)
         self.assertNotIn("需求产物", body)
         self.assertIn("未重新生成", body)
 
@@ -271,6 +271,9 @@ class ApprovalTests(unittest.TestCase):
         self.assertEqual(len(posts), 1)
         self.assertIn("PRD ready", posts[0])
         self.assertNotIn("阶段更新", posts[0])
+        self.assertNotIn("当前状态", posts[0])
+        self.assertNotIn("点击展开", posts[0])
+        self.assertIn("查看文档：prd.md", posts[0])
         self.assertNotIn("Stale acknowledgement", posts[0])
 
     def test_reporting_never_edits_existing_issue_history(self):

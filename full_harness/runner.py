@@ -987,6 +987,8 @@ def report(session, state):
     for stage in STAGES[:3]:
         done = state["completed"].get(stage, {})
         names = set(done.get("artifacts", [])) | set(done.get("evidence", {}))
+        if done.get("artifact"):
+            names.add(done["artifact"])
         names.add(
             state["config"]["stages"][stage]["artifact"].replace(
                 "{task}", str(state["task"]["number"])
@@ -1007,14 +1009,9 @@ def report(session, state):
                     content = "```" + path.suffix[1:] + "\n" + content + "\n```"
                 document_rows = [
                     "",
-                    "<details><summary>📄 "
-                    + (
-                        "参考材料（已有文件）"
-                        if done.get("mode") == "reuse"
-                        else NAMES[stage] + "产物（点击展开）"
-                    )
-                    + " · "
-                    + name
+                    "<details><summary>"
+                    + ("参考资料：" if done.get("mode") == "reuse" else "查看文档：")
+                    + Path(name).name
                     + "</summary>",
                     "",
                     content,
@@ -1097,7 +1094,7 @@ def report(session, state):
             reply_rows += ["", "请确认这份基线是否可以进入下一阶段，或提出修改意见。"]
         else:
             reply_rows += stage_documents.get(stage, [])
-            reply_rows += ["", "请确认以上产物，或直接提出修改意见。"]
+            reply_rows += ["", "看过文档后，直接告诉我是否可以继续，或有哪些需要修改。"]
     if not dialogue and state.get("pr_url"):
         reply_rows += ["", "交付 PR：" + state["pr_url"]]
     if not reply_rows:
