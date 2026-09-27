@@ -51,6 +51,18 @@ def plan(destination, managed, templates, revision, profile="full"):
                         + link
                         + "). Owner-managed document and stage paths: `.harness/full.json`.\n"
                     ).encode()
+                if name == "AGENTS.md":
+                    start = "<!-- harness-stage-deliverables -->"
+                    end = "<!-- /harness-stage-deliverables -->"
+                    template = templates.get(name, b"").decode()
+                    if start not in text and start in template and end in template:
+                        contract = template[
+                            template.index(start) : template.index(end) + len(end)
+                        ]
+                        original = changes.get(name, p.read_bytes()).decode()
+                        changes[name] = (
+                            original.rstrip() + "\n\n" + contract + "\n"
+                        ).encode()
     changes[".harness/full-upstream.json"] = (
         json.dumps(
             {

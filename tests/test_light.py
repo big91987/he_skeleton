@@ -485,6 +485,11 @@ class LightTests(unittest.TestCase):
                 "same-session" if (home / "codex-session.json").exists() else None,
             )
             self.assertNotIn("SKILL_BODY_NOT_FOR_PROMPT", prompt)
+            packet = json.loads(prompt.split("\n", 1)[1])
+            if current != "development":
+                self.assertNotIn("artifact", packet["stage_instructions"])
+            else:
+                self.assertIn("artifact", packet["stage_instructions"])
             output = next(outputs)
             before = len(replies)
             stream = options["on_event"]
