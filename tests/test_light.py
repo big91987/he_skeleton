@@ -421,13 +421,18 @@ class LightTests(unittest.TestCase):
         self.assertEqual(read_json(self.session / "public/agent-events.json"), [failed])
         self.assertFalse((self.session / "public/agent-result.json").exists())
 
-    def test_issue_conversation_reloads_checkpoint_resumes_and_publishes_once(self):
+    def test_conversation_modes_reload_checkpoint_resume_and_publish_once(self):
+        for continuous in (False, True):
+            with self.subTest(continuous=continuous):
+                self.conversation(continuous)
+
+    def conversation(self, continuous):
         """Fake only Codex/GitHub; exercise the actual entry, disk state and replies."""
         import hashlib
         import json
         import os
 
-        source = self.session / "source"
+        source = self.session / ("source-wait" if continuous else "source-once")
         source.mkdir()
         cfg = {"version": 2, "entries": [], "stages": {}}
         for stage in light.STAGES:
@@ -443,6 +448,7 @@ class LightTests(unittest.TestCase):
         write_json(source / ".harness/full.json", cfg)
         task = {"number": 1, "title": "搜索", "body": "按书名搜索"}
         replies = []
+        inbox = []
         outputs = iter(
             [
                 result(message="请确认需求", artifacts=["prd.md"]),
@@ -456,13 +462,19 @@ class LightTests(unittest.TestCase):
                 result(next_state="development", message="环境暂不可用，保留现场"),
             ]
         )
-        private = self.session / "private"
+        private = self.session / ("private-wait" if continuous else "private-once")
         scope = hashlib.sha256(b"test/repo\0main").hexdigest()[:16]
         session = private / "light" / scope / "1"
 
         def github(repo, path, method="GET", data=None):
             if path == "issues/1":
-                return {**task, "state": "open"}
+                finished = (session / "state.json").exists() and read_json(
+                    session / "state.json"
+                )["turn"] >= 7
+                return {
+                    **task,
+                    "state": "closed" if continuous and finished else "open",
+                }
             if method == "POST":
                 replies.append(data["body"])
                 return {"id": len(replies)}
@@ -471,7 +483,7 @@ class LightTests(unittest.TestCase):
                 replies[comment_id - 1] = data["body"]
                 return {"id": comment_id}
             if path.startswith("issues/1/comments?"):
-                return []
+                return inbox
             raise AssertionError(path)
 
         def codex(source, workspace, home, prompt, evidence, **options):
@@ -490,6 +502,11 @@ class LightTests(unittest.TestCase):
                 self.assertNotIn("artifact", packet["stage_instructions"])
             else:
                 self.assertIn("artifact", packet["stage_instructions"])
+            if (
+                continuous
+                and read_json(evidence.parent / "context.json")["state"]["turn"] == 1
+            ):
+                self.assertEqual(packet["message"], "已接收但尚未执行的评论")
             output = next(outputs)
             before = len(replies)
             stream = options["on_event"]
@@ -545,6 +562,7 @@ class LightTests(unittest.TestCase):
                 (workspace / name).write_text("unchanged " + name)
             write_json(evidence / "result.json", output)
             write_json(home / "codex-session.json", {"session_id": "same-session"})
+            # Replies become visible only after this turn's final publication.
             return output, "same-session"
 
         event_file = self.session / "event.json"
@@ -568,54 +586,176 @@ class LightTests(unittest.TestCase):
             patch.object(light, "api", side_effect=github),
             patch.object(light, "invoke", side_effect=codex) as agent,
         ):
-            for index, message in enumerate(
-                [None, "大小写呢？", "再看看文档", "ok 继续吧", "设计没问题，开始实现"],
-                1,
-            ):
-                event = {
-                    "issue": task,
-                    "sender": {"type": "User"},
-                    "action": "opened" if index == 1 else "created",
-                }
-                if message is not None:
-                    event["comment"] = {"id": index, "body": message}
-                write_json(event_file, event)
-                os.environ["GITHUB_EVENT_NAME"] = (
-                    "issues" if index == 1 else "issue_comment"
+            if continuous:
+                write_json(
+                    event_file,
+                    {"issue": task, "sender": {"type": "User"}, "action": "opened"},
                 )
-                os.environ["GITHUB_RUN_ID"] = str(index)
-                calls_before = agent.call_count
-                route = light.main("restore")
+                os.environ["GITHUB_RUN_ID"] = "one-run"
+                messages = iter(
+                    ["大小写呢？", "再看看文档", "ok 继续吧", "设计没问题，开始实现"]
+                )
+
+                def user_reply(_seconds):
+                    from datetime import datetime, timezone
+
+                    inbox.append(
+                        {
+                            "id": 1000 + len(inbox),
+                            "body": next(messages),
+                            "user": {"type": "User", "login": "test"},
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
+
+                with patch.object(light.time, "sleep", side_effect=user_reply):
+                    route = light.main("restore", wait_seconds=60)
+                    self.assertEqual(agent.call_count, 0)
+                    self.assertEqual(route, "requirements")
+                    checkpoint = read_json(session / "state.json")
+                    checkpoint["conversation_input"] = {
+                        "id": "accepted-before-cancel",
+                        "message": "已接收但尚未执行的评论",
+                        "sent": None,
+                    }
+                    write_json(session / "state.json", checkpoint)
+                    write_json(
+                        event_file,
+                        {"sender": {"type": "User"}, "inputs": {"task": "1"}},
+                    )
+                    os.environ["GITHUB_EVENT_NAME"] = "workflow_dispatch"
+                    os.environ["GITHUB_RUN_ID"] = "resumed-run"
+                    self.assertEqual(
+                        light.main("restore", wait_seconds=60), "requirements"
+                    )
+                    route = light.main(route, wait_seconds=60)
+                    self.assertEqual(route, "design")
+                    saved = read_json(session / "state.json")
+                    original_document = saved["documents"]["requirements"]
+                    self.assertEqual(saved["turn"], 4)
+                    # Retrying the finished Job republishes no history and calls no model.
+                    self.assertEqual(
+                        light.main("requirements", wait_seconds=60), "design"
+                    )
+                    self.assertEqual(agent.call_count, 4)
+                    self.assertEqual(light.main("restore", wait_seconds=60), "design")
+                    route = light.main(route, wait_seconds=60)
+                    self.assertEqual(route, "development")
+                    route = light.main(route, wait_seconds=60)
+                    self.assertEqual(route, "")
+                saved = read_json(session / "state.json")
+                self.assertEqual(saved["documents"]["requirements"], original_document)
+                self.assertEqual(saved["session_id"], "same-session")
+                self.assertEqual(saved["run_id"], "resumed-run")
+                self.assertEqual(saved["turn"], 7)
                 self.assertEqual(
-                    agent.call_count, calls_before
-                )  # disk routing, no model
+                    saved["approvals"]["requirements"]["message"], "ok 继续吧"
+                )
+                self.assertIn("design", saved["approvals"])
+                self.assertEqual(agent.call_count, 7)
+                self.assertEqual(len(replies), 14)
+                self.assertEqual(
+                    len(list((self.session / "public/turns").iterdir())), 7
+                )
+            else:
+                for index, message in enumerate(
+                    [
+                        None,
+                        "大小写呢？",
+                        "再看看文档",
+                        "ok 继续吧",
+                        "设计没问题，开始实现",
+                    ],
+                    1,
+                ):
+                    event = {
+                        "issue": task,
+                        "sender": {"type": "User"},
+                        "action": "opened" if index == 1 else "created",
+                    }
+                    if message is not None:
+                        event["comment"] = {"id": index, "body": message}
+                    write_json(event_file, event)
+                    os.environ["GITHUB_EVENT_NAME"] = (
+                        "issues" if index == 1 else "issue_comment"
+                    )
+                    os.environ["GITHUB_RUN_ID"] = str(index)
+                    calls_before = agent.call_count
+                    route = light.main("restore")
+                    self.assertEqual(
+                        agent.call_count, calls_before
+                    )  # disk routing, no model
+                    while route in light.STAGES:
+                        route = light.main(route)
+                    saved = read_json(session / "state.json")
+                    expected_calls = index if index < 4 else 2 * index - 3
+                    self.assertEqual(saved["turn"], expected_calls)
+                    self.assertEqual(saved["session_id"], "same-session")
+                    self.assertFalse(set(saved) & {"status", "pending", "delivered"})
+                    if index == 1:
+                        original_document = saved["documents"]["requirements"]
+                    self.assertEqual(
+                        saved["documents"]["requirements"], original_document
+                    )
+                    self.assertEqual(
+                        saved["stage"],
+                        "development"
+                        if index == 5
+                        else "design"
+                        if index == 4
+                        else "requirements",
+                    )
+                    self.assertEqual(agent.call_count, expected_calls)
+                    self.assertEqual(len(replies), 2 * expected_calls)
+                self.assertEqual(
+                    saved["approvals"]["requirements"]["message"], "ok 继续吧"
+                )
+                self.assertIn("design", saved["documents"])
+                self.assertIn("design", saved["approvals"])
+                self.assertIn("环境暂不可用", replies[-1])
+                route = light.main("restore")
                 while route in light.STAGES:
                     route = light.main(route)
-                saved = read_json(session / "state.json")
-                expected_calls = index if index < 4 else 2 * index - 3
-                self.assertEqual(saved["turn"], expected_calls)
-                self.assertEqual(saved["session_id"], "same-session")
-                self.assertFalse(set(saved) & {"status", "pending", "delivered"})
-                if index == 1:
-                    original_document = saved["documents"]["requirements"]
-                self.assertEqual(saved["documents"]["requirements"], original_document)
-                self.assertEqual(
-                    saved["stage"],
-                    "development"
-                    if index == 5
-                    else "design"
-                    if index == 4
-                    else "requirements",
-                )
-                self.assertEqual(agent.call_count, expected_calls)
-                self.assertEqual(len(replies), 2 * expected_calls)
-            self.assertEqual(saved["approvals"]["requirements"]["message"], "ok 继续吧")
-            self.assertIn("design", saved["documents"])
-            self.assertIn("design", saved["approvals"])
-            self.assertIn("环境暂不可用", replies[-1])
-            route = light.main("restore")
-            while route in light.STAGES:
-                route = light.main(route)
-            self.assertEqual(agent.call_count, 7)
-            self.assertEqual(len(replies), 14)
-            self.assertEqual(read_json(session / "state.json"), saved)
+                self.assertEqual(agent.call_count, 7)
+                self.assertEqual(len(replies), 14)
+                self.assertEqual(read_json(session / "state.json"), saved)
+
+    def test_waiting_inbox_permissions_pagination_restart_and_timeout(self):
+        import time
+        from datetime import datetime, timezone
+
+        def comment(number, actor="visitor", kind="User"):
+            return {
+                "id": number,
+                "body": "继续",
+                "user": {"login": actor, "type": kind},
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+        comments = [comment(n, kind="Bot") for n in range(1, 101)]
+        comments += [comment(101), comment(102, "test"), comment(103, "test")]
+        self.state["handled"] = ["102:requirements"]
+
+        def github(repo, path, method="GET", data=None):
+            if path == "issues/1":
+                return {"state": "open"}
+            if path == "collaborators/visitor/permission":
+                return {"permission": "read"}
+            page = int(path.rsplit("=", 1)[1])
+            return comments[(page - 1) * 100 : page * 100]
+
+        with patch.object(light, "api", side_effect=github):
+            incoming = light.wait_for_reply(
+                self.session, self.state, time.monotonic() + 10, 0
+            )
+            self.assertEqual(incoming["id"], "103")
+            restored = read_json(self.session / "state.json")
+            self.assertEqual(restored["comment_cursor"], 103)
+            self.assertEqual(restored["conversation_input"], incoming)
+            with self.assertRaises(TimeoutError):
+                light.wait_for_reply(self.session, restored, time.monotonic() + 0.01, 0)
+        with patch.object(light, "api", return_value={"state": "closed"}):
+            self.assertIsNone(
+                light.wait_for_reply(self.session, restored, time.monotonic() + 10, 0)
+            )
+        self.assertEqual(read_json(self.session / "state.json"), restored)

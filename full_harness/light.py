@@ -190,7 +190,7 @@ def prompt(state, message):
         "澄清、提问、等待确认、遇到阻塞都停留在本阶段，在 message 直接解释或提问，等用户下一条回复再继续；没有额外的等待状态。"
         "需求和设计完成后，在 artifacts 提交真实文档，并在 message 请用户确认。你结合本条消息和上下文判断是否确认，不依赖固定词或命令。"
         "用户明确确认已展示的需求或设计后，返回相邻下一阶段且 artifacts=[]，结束当前 Job。框架会自动启动下一 Job 并恢复本 Session，不要在当前 Job 做下一阶段的工作。handoff_from_previous_job 为 true 时，原评论确认的是上一阶段；完成本阶段工作后展示文档并等待新确认，不能重复使用同一批准。只有研发 Job 可以返回 done。"
-        "已有文档、原型或代码直接复用，缺必要决策才澄清。用户要修改前面已确认的内容，返回对应阶段并说明；当前 Job 不代替前面阶段做修改，下一次消息从该阶段接续。"
+        "已有文档、原型或代码直接复用，缺必要决策才澄清。用户要修改前面已确认的内容，返回对应阶段并说明；当前 Job 不代替前面阶段做修改；保存退回位置后需从 Actions 手动接续该阶段，已结束的 Job 不能倒序重开。"
         "阶段工作与产物遵循 AGENTS.md 和当前 Skill 的输出契约；配置中的交接路径不代替完整交付集合。"
         "研发在同一个进程尽量持续实现、格式化、lint、测试和整改；Python 修改运行 python3 full_harness/quality.py fix，再 check。"
         "只有实际完成研发才返回 done，并生成配置指定的验证记录。原生 Stop Hook 会检查，失败让你在同一次执行中修复；环境阻塞返回 development 并说明。"
@@ -263,8 +263,10 @@ def execute(source, session, state, message, event_id, sent=None):
     write_json(session / "state.json", state)
 
 
-def report(session, state, error=None):
+def report(session, state, error=None, continuous=False):
     public = Path(os.environ["LIGHT_PUBLIC"])
+    if continuous:
+        public = public / "turns" / str(state["turn"])
     public.mkdir(parents=True, exist_ok=True)
     body = error or state["reply"]
     evidence = session / "turns" / str(state["turn"])
@@ -276,6 +278,13 @@ def report(session, state, error=None):
     )
     body += "\n\n本轮执行：" + ("执行失败" if error else "已结束")
     body += f"\n\n本轮阶段（开始 → 已保存）：`{before} → {state['stage']}`"
+    if (
+        continuous
+        and not error
+        and state["stage"] == before
+        and state["stage"] != "done"
+    ):
+        body += "\n\n当前 Workflow 仍在运行，正在等你的下一条回复；直接在本 Issue 评论即可，无需重新启动。"
     # Read the actual current-turn output, including a proposal rejected by checks.
     # Never reconstruct it from the checkpoint or fall back to an earlier turn.
     rendered = None
@@ -343,6 +352,8 @@ def report(session, state, error=None):
     if state.get("pr_url"):
         body += "\n\n[交付 PR](" + state["pr_url"] + ")"
     body += "\n\n[运行日志及产物下载](" + url + ")"
+    if continuous:
+        body += "（文档可在本条评论展开；下载包在本阶段 Job 结束后提供。）"
     body = body.replace(str(session), "<private-runtime>").replace(
         str(Path.home()), "<private-runtime>"
     )
@@ -356,9 +367,111 @@ def report(session, state, error=None):
     write_json(session / "state.json", state)
 
 
-def main(job="restore"):
+def wait_for_reply(session, state, deadline, poll_seconds):
+    """Read the Issue inbox in order; persist the cursor only after validation."""
+    print(
+        "等待 Issue 回复；当前 Job 保持运行，收到有权限用户的消息后接续。", flush=True
+    )
+    repo = state["repo"]
+    number = state["task"]["number"]
+    while time.monotonic() < deadline:
+        issue = api(repo, f"issues/{number}")
+        if issue["state"] != "open":
+            print("Issue 已关闭，停止等待。", flush=True)
+            return None
+        page = 1
+        while True:
+            comments = api(repo, f"issues/{number}/comments?per_page=100&page={page}")
+            for comment in comments:
+                comment_id = int(comment["id"])
+                if comment_id <= state.get("comment_cursor", 0):
+                    continue
+                user = comment.get("user", {})
+                actor = user.get("login", "")
+                body = (comment.get("body") or "").strip()
+                permitted = False
+                if (
+                    user.get("type") == "User"
+                    and actor
+                    and body
+                    and not framework_comment({"comment": comment})
+                    and not any(
+                        event == str(comment_id)
+                        or event.startswith(str(comment_id) + ":")
+                        for event in state.get("handled", [])
+                    )
+                ):
+                    # A deleted/non-collaborating user has no write permission.
+                    # API/network errors fail closed without consuming their message.
+                    if actor.casefold() == repo.split("/")[0].casefold():
+                        permitted = True
+                    else:
+                        permission = api(repo, "collaborators/" + actor + "/permission")
+                        permitted = permission.get("permission") in {
+                            "write",
+                            "maintain",
+                            "admin",
+                        }
+                state["comment_cursor"] = comment_id
+                if permitted:
+                    state["conversation_input"] = {
+                        "id": str(comment_id),
+                        "message": body,
+                        "sent": comment["created_at"],
+                    }
+                    state["start_stage"] = state["stage"]
+                write_json(session / "state.json", state)
+                if permitted:
+                    print(
+                        f"收到评论 {comment_id}，恢复 {state['stage']} Session。",
+                        flush=True,
+                    )
+                    return state["conversation_input"]
+            if len(comments) < 100:
+                break
+            page += 1
+        time.sleep(min(poll_seconds, max(0, deadline - time.monotonic())))
+    raise TimeoutError(
+        "本次等待时间已用完，Session 和阶段已保存。请到 Actions 手动运行本工作流，"
+        "填写同一 Issue 编号接续；仅发评论不会重新启动已结束的运行。"
+    )
+
+
+def run_stage(source, session, state, job, first_input, deadline=None, poll_seconds=15):
+    """Keep one stage Job alive across user turns; model owns stage decisions."""
+    incoming = first_input
+    while True:
+        event_id = incoming["id"] + ":" + job
+        execute(
+            source, session, state, incoming["message"], event_id, incoming.get("sent")
+        )
+        if state["stage"] == "done":
+            from full_harness.light_delivery import deliver
+
+            deliver(session, state)
+        report(session, state, continuous=deadline is not None)
+        if deadline is None:
+            return
+        if state["stage"] != job:
+            if state["stage"] in STAGES and STAGES.index(state["stage"]) < STAGES.index(
+                job
+            ):
+                publish(
+                    api,
+                    state,
+                    "已保存退回阶段。当前流水线不能倒序重开已结束的 Job；请在 Actions 手动运行同一 Issue 接续。",
+                )
+                write_json(session / "state.json", state)
+            return
+        incoming = wait_for_reply(session, state, deadline, poll_seconds)
+        if incoming is None:
+            return
+
+
+def main(job="restore", wait_seconds=None, poll_seconds=15):
     if job not in ["restore", *STAGES]:
         raise ValueError("Unknown stage job")
+    deadline = time.monotonic() + wait_seconds if wait_seconds is not None else None
     source = Path(__file__).resolve().parents[1]
     event = read_json(os.environ["GITHUB_EVENT_PATH"])
     if framework_comment(event):
@@ -413,6 +526,8 @@ def main(job="restore"):
             )
         )
         if job == "restore":
+            new_run = state.get("run_id") != run_id or "conversation_input" not in state
+            previous_start = state.get("start_stage", state["stage"])
             # Old single-job events stay consumed. Do not silently rerun history.
             if event_id in state.get("handled", []):
                 output("stage", "")
@@ -431,13 +546,50 @@ def main(job="restore"):
             elif state["run_id"] != run_id:
                 output("stage", "")
                 return ""
+            if wait_seconds is not None and new_run:
+                previous_input = state.get("conversation_input")
+                previous_key = (
+                    (previous_input["id"] + ":" + state["stage"])
+                    if previous_input
+                    else None
+                )
+                if (
+                    previous_input
+                    and previous_key not in state.get("handled", [])
+                    and previous_key != state.get("active_event")
+                ):
+                    state["start_stage"] = previous_start
+                    # The cursor may have been saved just before cancellation.
+                    # Keep accepted input which never reached execute().
+                    if message:
+                        previous_input["message"] += "\n\n手动接续补充：" + message
+                else:
+                    state["conversation_input"] = {
+                        "id": event_id,
+                        "message": message,
+                        "sent": event.get("comment", {}).get("created_at"),
+                    }
             write_json(state_path, state)
-            output("stage", state["start_stage"])
+            restored_stage = (
+                (state["stage"] if state["stage"] != "done" else "development")
+                if wait_seconds is not None
+                else state["start_stage"]
+            )
+            output("stage", restored_stage)
             print("恢复阶段：" + state["stage"] + "（不调用模型）", flush=True)
-            return state["start_stage"]
+            return restored_stage
         if state.get("event_id") != event_id or state.get("run_id") != run_id:
             raise ValueError("请先在本轮 restore Job 恢复任务，再执行对应阶段")
-        stage_event = event_id + ":" + job
+        incoming = (
+            state["conversation_input"]
+            if wait_seconds is not None
+            else {
+                "id": event_id,
+                "message": message,
+                "sent": event.get("comment", {}).get("created_at"),
+            }
+        )
+        stage_event = incoming["id"] + ":" + job
         handled = state.get("handled", [])
         if (
             stage_event not in handled
@@ -465,31 +617,28 @@ def main(job="restore"):
             if pr.get("merged_at") or pr.get("state") == "closed":
                 raise ValueError("PR 已合入或关闭，请新建 Issue 开始下一次迭代")
         try:
-            execute(
-                source,
-                session,
-                state,
-                message,
-                stage_event,
-                event.get("comment", {}).get("created_at"),
-            )
-            if state["stage"] == "done":
-                from full_harness.light_delivery import deliver
-
-                deliver(session, state)
+            run_stage(source, session, state, job, incoming, deadline, poll_seconds)
         except Exception as error:
             state["error"] = str(error)
             write_json(state_path, state)
-            report(
-                session,
-                state,
+            notice = (
                 "这次执行遇到问题："
                 + str(error)
-                + "。现场和 Session 已保留，可查看日志后回复继续。",
+                + "。现场和 Session 已保留。"
+                + (
+                    "请在 Actions 手动运行同一 Issue 接续。"
+                    if wait_seconds is not None
+                    else "可查看日志后回复继续。"
+                )
             )
+            if wait_seconds is not None and not state.get("active_event"):
+                # Waiting/transport failure is not failure of the last model turn.
+                publish(api, state, notice)
+                write_json(state_path, state)
+            else:
+                report(session, state, notice, continuous=wait_seconds is not None)
             raise
         state.pop("error", None)
-        report(session, state)
         next_stage = (
             state["stage"]
             if state["stage"] in STAGES
@@ -503,4 +652,12 @@ def main(job="restore"):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("job", choices=["restore", *STAGES])
-    main(parser.parse_args().job)
+    parser.add_argument(
+        "--wait-seconds",
+        type=int,
+        help="Keep this stage Job alive for Issue replies, including execution time",
+    )
+    args = parser.parse_args()
+    if args.wait_seconds is not None and args.wait_seconds <= 0:
+        parser.error("--wait-seconds must be positive")
+    main(args.job, wait_seconds=args.wait_seconds)
