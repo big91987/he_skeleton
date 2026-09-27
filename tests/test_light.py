@@ -759,3 +759,73 @@ class LightTests(unittest.TestCase):
                 light.wait_for_reply(self.session, restored, time.monotonic() + 10, 0)
             )
         self.assertEqual(read_json(self.session / "state.json"), restored)
+
+    def test_waiting_survives_transient_get_failures_without_consuming_input(self):
+        import subprocess
+        import time
+
+        from full_harness import runner
+
+        state = self.state
+        state["comment_cursor"] = 100
+        comment = {
+            "id": 101,
+            "body": "继续核对设计",
+            "created_at": "2026-09-28T00:00:00Z",
+            "user": {"login": "developer", "type": "User"},
+        }
+        calls = {}
+
+        def github_process(argv, **kwargs):
+            path = argv[2]
+            count = calls[path] = calls.get(path, 0) + 1
+            if count == 1:
+                self.assertEqual(state["comment_cursor"], 100)
+                if path.endswith("issues/1"):
+                    return subprocess.CompletedProcess(argv, 1, "", "unexpected EOF")
+                if "comments?" in path:
+                    raise subprocess.TimeoutExpired(argv, 90)
+                return subprocess.CompletedProcess(
+                    argv, 1, "", "HTTP 503: Service Unavailable"
+                )
+            body = (
+                {"state": "open"}
+                if path.endswith("issues/1")
+                else [comment]
+                if "comments?" in path
+                else {"permission": "write"}
+            )
+            return subprocess.CompletedProcess(
+                argv, 0, __import__("json").dumps(body), ""
+            )
+
+        with (
+            patch.object(runner.subprocess, "run", side_effect=github_process),
+            patch.object(light.time, "sleep"),
+        ):
+            incoming = light.wait_for_reply(
+                self.session, state, time.monotonic() + 2, 0
+            )
+        self.assertEqual(incoming["id"], "101")
+        self.assertEqual(
+            read_json(self.session / "state.json")["conversation_input"], incoming
+        )
+        self.assertEqual(state["comment_cursor"], 101)
+        for method, failure in (
+            ("GET", "HTTP 403: Forbidden"),
+            ("POST", "unexpected EOF"),
+        ):
+            with (
+                self.subTest(method=method),
+                patch.object(
+                    runner.subprocess,
+                    "run",
+                    return_value=subprocess.CompletedProcess(
+                        [], 1, "", "HTTP 403: Forbidden"
+                    ),
+                ) as command,
+            ):
+                with self.assertRaises(RuntimeError) as caught:
+                    runner.api("test/repo", "issues/1/comments", method)
+                self.assertNotIsInstance(caught.exception, runner.GitHubReadUnavailable)
+                self.assertEqual(command.call_count, 1)

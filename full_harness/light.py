@@ -18,6 +18,7 @@ if __package__ in (None, ""):
 from full_harness.codex import invoke
 from full_harness.common import controls, digest, read_json, relative_file, write_json
 from full_harness.runner import (
+    GitHubReadUnavailable,
     api,
     event_input,
     framework_comment,
@@ -374,62 +375,80 @@ def wait_for_reply(session, state, deadline, poll_seconds):
     )
     repo = state["repo"]
     number = state["task"]["number"]
+    failures = 0
     while time.monotonic() < deadline:
-        issue = api(repo, f"issues/{number}")
-        if issue["state"] != "open":
-            print("Issue 已关闭，停止等待。", flush=True)
-            return None
-        page = 1
-        while True:
-            comments = api(repo, f"issues/{number}/comments?per_page=100&page={page}")
-            for comment in comments:
-                comment_id = int(comment["id"])
-                if comment_id <= state.get("comment_cursor", 0):
-                    continue
-                user = comment.get("user", {})
-                actor = user.get("login", "")
-                body = (comment.get("body") or "").strip()
-                permitted = False
-                if (
-                    user.get("type") == "User"
-                    and actor
-                    and body
-                    and not framework_comment({"comment": comment})
-                    and not any(
-                        event == str(comment_id)
-                        or event.startswith(str(comment_id) + ":")
-                        for event in state.get("handled", [])
-                    )
-                ):
-                    # A deleted/non-collaborating user has no write permission.
-                    # API/network errors fail closed without consuming their message.
-                    if actor.casefold() == repo.split("/")[0].casefold():
-                        permitted = True
-                    else:
-                        permission = api(repo, "collaborators/" + actor + "/permission")
-                        permitted = permission.get("permission") in {
-                            "write",
-                            "maintain",
-                            "admin",
+        try:
+            issue = api(repo, f"issues/{number}")
+            if issue["state"] != "open":
+                print("Issue 已关闭，停止等待。", flush=True)
+                return None
+            page = 1
+            while True:
+                comments = api(
+                    repo, f"issues/{number}/comments?per_page=100&page={page}"
+                )
+                for comment in comments:
+                    comment_id = int(comment["id"])
+                    if comment_id <= state.get("comment_cursor", 0):
+                        continue
+                    user = comment.get("user", {})
+                    actor = user.get("login", "")
+                    body = (comment.get("body") or "").strip()
+                    permitted = False
+                    if (
+                        user.get("type") == "User"
+                        and actor
+                        and body
+                        and not framework_comment({"comment": comment})
+                        and not any(
+                            event == str(comment_id)
+                            or event.startswith(str(comment_id) + ":")
+                            for event in state.get("handled", [])
+                        )
+                    ):
+                        # A deleted/non-collaborating user has no write permission.
+                        # API/network errors fail closed without consuming their message.
+                        if actor.casefold() == repo.split("/")[0].casefold():
+                            permitted = True
+                        else:
+                            permission = api(
+                                repo, "collaborators/" + actor + "/permission"
+                            )
+                            permitted = permission.get("permission") in {
+                                "write",
+                                "maintain",
+                                "admin",
+                            }
+                    state["comment_cursor"] = comment_id
+                    if permitted:
+                        state["conversation_input"] = {
+                            "id": str(comment_id),
+                            "message": body,
+                            "sent": comment["created_at"],
                         }
-                state["comment_cursor"] = comment_id
-                if permitted:
-                    state["conversation_input"] = {
-                        "id": str(comment_id),
-                        "message": body,
-                        "sent": comment["created_at"],
-                    }
-                    state["start_stage"] = state["stage"]
-                write_json(session / "state.json", state)
-                if permitted:
-                    print(
-                        f"收到评论 {comment_id}，恢复 {state['stage']} Session。",
-                        flush=True,
-                    )
-                    return state["conversation_input"]
-            if len(comments) < 100:
-                break
-            page += 1
+                        state["start_stage"] = state["stage"]
+                    write_json(session / "state.json", state)
+                    if permitted:
+                        print(
+                            f"收到评论 {comment_id}，恢复 {state['stage']} Session。",
+                            flush=True,
+                        )
+                        return state["conversation_input"]
+                if len(comments) < 100:
+                    break
+                page += 1
+        except GitHubReadUnavailable as error:
+            failures += 1
+            delay = min(60, 5 * 2 ** min(failures - 1, 4))
+            print(
+                f"GitHub 暂时不可达，{delay} 秒后重试读取；Session 与未读评论保留。{error}",
+                flush=True,
+            )
+            time.sleep(min(delay, max(0, deadline - time.monotonic())))
+            continue
+        if failures:
+            print("GitHub 连接已恢复，继续等待评论。", flush=True)
+            failures = 0
         time.sleep(min(poll_seconds, max(0, deadline - time.monotonic())))
     raise TimeoutError(
         "本次等待时间已用完，Session 和阶段已保存。请到 Actions 手动运行本工作流，"

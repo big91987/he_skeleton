@@ -35,19 +35,55 @@ from full_harness.router import classify
 from full_harness.stop_hook import review_prompt
 
 
+class GitHubReadUnavailable(RuntimeError):
+    """A transient, retryable GET failure; mutations must never be blindly retried."""
+
+
 def api(repo, path, method="GET", data=None):
     argv = ["gh", "api", "repos/" + repo + "/" + path, "--method", method]
     if data is not None:
         argv += ["--input", "-"]
-    result = subprocess.run(
-        argv,
-        input=json.dumps(data) if data is not None else None,
-        capture_output=True,
-        text=True,
-        timeout=90,
-    )
+    try:
+        result = subprocess.run(
+            argv,
+            input=json.dumps(data) if data is not None else None,
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+    except subprocess.TimeoutExpired as error:
+        if method == "GET":
+            raise GitHubReadUnavailable("GitHub GET timed out: " + path) from error
+        raise
     if result.returncode:
-        raise RuntimeError("GitHub API failed: " + path + " " + result.stderr[-800:])
+        detail = result.stderr[-800:]
+        message = "GitHub API failed: " + path + " " + detail
+        http = re.search(r"HTTP (\d{3})", detail)
+        transient = (
+            int(http[1]) in {408, 429, 500, 502, 503, 504}
+            if http
+            else any(
+                word in detail.lower()
+                for word in (
+                    "unexpected eof",
+                    "connection reset",
+                    "econnreset",
+                    "connection refused",
+                    "could not resolve",
+                    "no such host",
+                    "timeout",
+                    "timed out",
+                    "tls handshake",
+                    "network is unreachable",
+                    "error connecting",
+                    "couldn't connect",
+                    "failed to connect",
+                )
+            )
+        )
+        if method == "GET" and transient:
+            raise GitHubReadUnavailable(message)
+        raise RuntimeError(message)
     return json.loads(result.stdout) if result.stdout.strip() else None
 
 
