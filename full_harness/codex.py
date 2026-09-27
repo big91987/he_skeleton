@@ -75,6 +75,7 @@ def invoke(
     schema_override=None,
     skills=None,
     read_only=False,
+    hook_script="stop_hook.py",
 ):
     if (workspace / ".codex").exists():
         raise ValueError(
@@ -93,11 +94,13 @@ def invoke(
         + "\n"
     )
     config += 'model_provider="harness_http"\n[model_providers.harness_http]\nname="OpenAI HTTPS"\nwire_api="responses"\nrequires_openai_auth=true\nsupports_websockets=false\n'
+    if hook_script not in {"stop_hook.py", "light_hook.py"}:
+        raise ValueError("Unknown managed hook")
     if hook_context:
         cmd = shlex.join(
             [
                 sys.executable,
-                str(source / "full_harness/stop_hook.py"),
+                str(source / "full_harness" / hook_script),
                 str(hook_context),
             ]
         )
