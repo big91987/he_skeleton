@@ -244,6 +244,51 @@ class FullWorkflowTests(unittest.TestCase):
                 (self.root / "turns" / str(state["turn"]) / "gate.json").exists()
             )
 
+    def test_document_link_artifact_resolves_to_existing_workspace_file(self):
+        state = {
+            "config": self.cfg,
+            "task": {"number": 1},
+            "turn": 0,
+            "controls": controls(self.work),
+            "baseline": "sha",
+            "history": [],
+            "completed": {},
+            "status": "running",
+            "stage": "design",
+        }
+        with (
+            patch.object(runner, "agent_input", return_value=("task", {})),
+            patch.object(
+                runner,
+                "invoke",
+                return_value=(
+                    {
+                        "status": "ready",
+                        "summary": "done",
+                        "question": "",
+                        "artifacts": [f"[设计文档]({self.work / 'validation.md'})"],
+                    },
+                    "builder",
+                ),
+            ),
+        ):
+            runner.run_agent(self.root, self.root, state, "design")
+        self.assertEqual(state["status"], "awaiting_approval")
+        self.assertEqual(state["completed"]["design"]["artifacts"], ["validation.md"])
+
+    def test_artifact_link_cannot_escape_workspace(self):
+        outside = self.root / "private.txt"
+        outside.write_text("not a project artifact")
+        (self.work / "escape").symlink_to(outside)
+        for name in [
+            f"[file]({outside})",
+            "../private.txt",
+            "escape",
+            "[file](https://example.com/file)",
+        ]:
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                runner.artifact_name(self.work, name)
+
     def test_documents_missing_artifact_or_clarification_do_not_request_approval(self):
         cases = [
             ("ready", "", "blocked"),
