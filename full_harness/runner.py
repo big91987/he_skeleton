@@ -987,6 +987,8 @@ def report(session, state):
     for stage in STAGES[:3]:
         done = state["completed"].get(stage, {})
         names = set(done.get("artifacts", [])) | set(done.get("evidence", {}))
+        if done.get("artifact"):
+            names.add(done["artifact"])
         names.add(
             state["config"]["stages"][stage]["artifact"].replace(
                 "{task}", str(state["task"]["number"])
