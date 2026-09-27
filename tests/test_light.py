@@ -236,9 +236,7 @@ class LightTests(unittest.TestCase):
             set(self.state) & {"status", "pending", "delivered", "reply_token"}
         )
 
-    def test_design_approval_can_finish_development_in_same_call(self):
-        from full_harness.common import digest
-
+    def test_design_approval_hands_off_to_development_job(self):
         self.state.update(stage="design", turn=1)
         (self.root / "design.md").write_text("设计")
         light.apply_result(
@@ -248,18 +246,18 @@ class LightTests(unittest.TestCase):
             "展示设计",
             None,
         )
-        write_json(
-            self.session / "turns/1/gate.json",
-            {"status": "passed", "snapshot": digest(self.root)},
-        )
+        with self.assertRaises(ValueError):
+            light.apply_result(
+                self.session, self.state, result(next_state="done"), "设计没问题", None
+            )
         light.apply_result(
             self.session,
             self.state,
-            result(next_state="done"),
-            "设计没问题，完成开发",
+            result(next_state="development"),
+            "设计没问题",
             None,
         )
-        self.assertEqual(self.state["stage"], "done")
+        self.assertEqual(self.state["stage"], "development")
         self.assertIn("design", self.state["approvals"])
 
     def test_codex_wrapper_accepts_three_field_schema(self):
@@ -412,9 +410,12 @@ class LightTests(unittest.TestCase):
                 result(message="请确认需求", artifacts=["prd.md"]),
                 result(message="搜索不需要区分大小写"),
                 result(message="这是同一份需求", artifacts=["prd.md"]),
+                result(next_state="design", message="需求已确认，接着设计"),
                 result(
                     next_state="design", message="设计已完成", artifacts=["design.md"]
                 ),
+                result(next_state="development", message="设计已确认，接着开发"),
+                result(next_state="development", message="环境暂不可用，保留现场"),
             ]
         )
         private = self.session / "private"
@@ -432,7 +433,11 @@ class LightTests(unittest.TestCase):
             raise AssertionError(path)
 
         def codex(source, workspace, home, prompt, evidence, **options):
-            self.assertEqual(options["skills"], light.STAGES)
+            current = read_json(evidence.parent / "context.json")["state"]["stage"]
+            self.assertEqual(options["skills"], [current])
+            self.assertEqual(
+                options["hook_context"] is not None, current == "development"
+            )
             self.assertEqual(options["session_id"], "same-session" if replies else None)
             self.assertNotIn("SKILL_BODY_NOT_FOR_PROMPT", prompt)
             output = next(outputs)
@@ -464,7 +469,8 @@ class LightTests(unittest.TestCase):
             patch.object(light, "invoke", side_effect=codex) as agent,
         ):
             for index, message in enumerate(
-                [None, "大小写呢？", "再看看文档", "ok 继续吧"], 1
+                [None, "大小写呢？", "再看看文档", "ok 继续吧", "设计没问题，开始实现"],
+                1,
             ):
                 event = {
                     "issue": task,
@@ -478,23 +484,38 @@ class LightTests(unittest.TestCase):
                     "issues" if index == 1 else "issue_comment"
                 )
                 os.environ["GITHUB_RUN_ID"] = str(index)
-                light.main()  # each call must reload the saved checkpoint
+                calls_before = agent.call_count
+                route = light.main("restore")
+                self.assertEqual(
+                    agent.call_count, calls_before
+                )  # disk routing, no model
+                while route in light.STAGES:
+                    route = light.main(route)
                 saved = read_json(session / "state.json")
-                self.assertEqual(saved["turn"], index)
+                expected_calls = index if index < 4 else 2 * index - 3
+                self.assertEqual(saved["turn"], expected_calls)
                 self.assertEqual(saved["session_id"], "same-session")
                 self.assertFalse(set(saved) & {"status", "pending", "delivered"})
                 if index == 1:
                     original_document = saved["documents"]["requirements"]
                 self.assertEqual(saved["documents"]["requirements"], original_document)
                 self.assertEqual(
-                    saved["stage"], "design" if index == 4 else "requirements"
+                    saved["stage"],
+                    "development"
+                    if index == 5
+                    else "design"
+                    if index == 4
+                    else "requirements",
                 )
-                self.assertEqual(agent.call_count, index)
-                self.assertEqual(len(replies), index)
+                self.assertEqual(agent.call_count, expected_calls)
+                self.assertEqual(len(replies), expected_calls)
             self.assertEqual(saved["approvals"]["requirements"]["message"], "ok 继续吧")
             self.assertIn("design", saved["documents"])
-            self.assertIn("设计已完成", replies[-1])
-            light.main()  # redelivered event must neither rerun Codex nor repost
-            self.assertEqual(agent.call_count, 4)
-            self.assertEqual(len(replies), 4)
+            self.assertIn("design", saved["approvals"])
+            self.assertIn("环境暂不可用", replies[-1])
+            route = light.main("restore")
+            while route in light.STAGES:
+                route = light.main(route)
+            self.assertEqual(agent.call_count, 7)
+            self.assertEqual(len(replies), 7)
             self.assertEqual(read_json(session / "state.json"), saved)
