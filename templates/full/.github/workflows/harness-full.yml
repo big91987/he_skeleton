@@ -25,6 +25,7 @@ jobs:
   authorize:
     if: >-
       github.event.sender.type != 'Bot' && !github.event.issue.pull_request &&
+      !startsWith(github.event.comment.body, '<!-- harness-event:') &&
       (github.event_name == 'workflow_dispatch' || github.event_name == 'issues' || github.event_name == 'issue_comment')
     runs-on: ubuntu-latest
     permissions:

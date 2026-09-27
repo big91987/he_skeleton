@@ -65,6 +65,25 @@ class NaturalEntryTests(unittest.TestCase):
                 "next",
             )
 
+    def test_framework_comment_from_owner_is_not_user_input(self):
+        self.event["comment"]["body"] = "<!-- harness-event:4:abc -->\nPlease confirm"
+        with self.assertRaisesRegex(ValueError, "Framework"):
+            runner.event_input(self.event, "owner/repo", "owner", "issue_comment")
+
+    def test_framework_comment_exits_before_loading_or_running_task(self):
+        self.event["comment"]["body"] = "<!-- harness-event:4:abc -->\nPlease confirm"
+        event_file = self.root / "event.json"
+        runner.write_json(event_file, self.event)
+        with (
+            patch.dict(os.environ, {"GITHUB_EVENT_PATH": str(event_file)}),
+            patch("sys.argv", ["runner.py", "entry"]),
+            patch.object(runner, "event_input") as event_input,
+            patch.object(runner, "invoke") as invoke,
+        ):
+            runner.main()
+        event_input.assert_not_called()
+        invoke.assert_not_called()
+
     def test_owner_issue_starts_without_label(self):
         event = {"action": "opened", "issue": {"number": 12, "labels": []}}
         self.assertEqual(
