@@ -175,24 +175,28 @@ def prompt(state, message):
             s: list(d["files"]) for s, d in state.get("approvals", {}).items()
         },
         "project_entries": state["config"]["entries"],
-        "stage_instructions": state["config"]["stages"][stage],
+        "stage_instructions": {
+            key: value
+            for key, value in state["config"]["stages"][stage].items()
+            if key != "artifact" or stage == "development"
+        },
         "checks": state["config"].get("checks", []),
     }
     return (
         "本轮采用三字段协议：next_state、message、artifacts。旧会话里的 status、awaiting_approval、delivered、approval_quote 等输出字段不再使用。"
-        "你直接与用户协作；本次执行只负责输入 stage 对应的阶段 Job，不做额外意图分类。首次读项目入口，后续及跨阶段都恢复同一个原生 Session。本轮仅开放当前阶段的 Skill，按需渐进读取。"
+        "你直接与用户协作；本次执行只负责输入 stage 对应的阶段 Job，不做额外意图分类。每轮重新读取 AGENTS.md 和项目索引，后续及跨阶段恢复同一个原生 Session。本轮仅开放当前阶段的 Skill，按需渐进读取。"
         "沟通方式：开始工作前先用一两句简短说明当前阶段、对用户消息的理解和接下来做什么；工作中仅在有实质进展、发现或阻塞时主动说明，不逐条复述工具操作。过程回复使用面向用户的 commentary 文本，会直接转发到 Issue；只有最终回复使用三字段 JSON。不要等待做完才首次回应，也不要机械套用固定开场白。"
         "输入 stage 是本轮开始的位置；输出 next_state 是本轮结束后的接续位置。只有 requirements、design、development、done 四个值。"
         "澄清、提问、等待确认、遇到阻塞都停留在本阶段，在 message 直接解释或提问，等用户下一条回复再继续；没有额外的等待状态。"
         "需求和设计完成后，在 artifacts 提交真实文档，并在 message 请用户确认。你结合本条消息和上下文判断是否确认，不依赖固定词或命令。"
         "用户明确确认已展示的需求或设计后，返回相邻下一阶段且 artifacts=[]，结束当前 Job。框架会自动启动下一 Job 并恢复本 Session，不要在当前 Job 做下一阶段的工作。handoff_from_previous_job 为 true 时，原评论确认的是上一阶段；完成本阶段工作后展示文档并等待新确认，不能重复使用同一批准。只有研发 Job 可以返回 done。"
         "已有文档、原型或代码直接复用，缺必要决策才澄清。用户要修改前面已确认的内容，返回对应阶段并说明；当前 Job 不代替前面阶段做修改，下一次消息从该阶段接续。"
-        "设计按实际项目覆盖必要 UI/原型、架构和数据契约，不强迫所有产品做网页。"
+        "阶段工作与产物遵循 AGENTS.md 和当前 Skill 的输出契约；配置中的交接路径不代替完整交付集合。"
         "研发在同一个进程尽量持续实现、格式化、lint、测试和整改；Python 修改运行 python3 full_harness/quality.py fix，再 check。"
         "只有实际完成研发才返回 done，并生成配置指定的验证记录。原生 Stop Hook 会检查，失败让你在同一次执行中修复；环境阻塞返回 development 并说明。"
         "普通问答保留原阶段，artifacts=[]，不重复提交旧文档。仅新文档、修订文档或用户要求查看文件时列出实际相对路径。"
         "不得修改执行规则或伪造验证，不能改过已确认文档后沿用旧确认。"
-        "即使 Skill 建议状态，也不把 Pending User Approval、Ready for Architecture 等审批状态写进文档。message 是直接给用户看的原话。"
+        "框架的阶段审批由运行时维护；Skill 要求的产品和架构决策记录照常产出。message 是直接给用户看的原话。"
         "不另调意图分类或独立评审模型，流程记录由框架维护。\n"
         + json.dumps(packet, ensure_ascii=False, indent=2)
     )

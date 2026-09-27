@@ -321,7 +321,7 @@ def agent_input(state, stage, session):
         "handoff_artifact": spec["artifact"].replace(
             "{task}", str(state["task"]["number"])
         ),
-        "output_format": "artifacts 必须是实际文件的仓库相对路径字符串，例如 docs/design.md；不要写 Markdown 链接、文件说明、绝对路径或 URL。",
+        "output_format": "遵循 AGENTS.md 和当前 Skill 的完整产物约定；handoff_artifact 是交接入口而非唯一交付物。artifacts 列出供审查的全部实际文件的仓库相对路径，不写 Markdown 链接、文件说明、绝对路径或 URL。",
         "checks": cfg.get("checks", []),
         "feedback": state.get("feedback", ""),
     }

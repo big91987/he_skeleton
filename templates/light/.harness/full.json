@@ -16,7 +16,7 @@
         "defining-platform-products-cn"
       ],
       "artifact": "docs/04-implementation/tasks/{task}/prd.md",
-      "instruction": "明确本次目标、范围、用户完整主线和验收标准。仅在缺少用户决策时澄清；复用已有材料。 使用 $resumable-batch-grilling 管理需要澄清的决策；目标明确时不强制提问。",
+      "instruction": "遵循 AGENTS.md 的阶段产物约定和当前阶段 Skill；读取其规定的参考与输出契约，使用已确认的上游产物。",
       "inputs": [
         "docs/00-global/project.md"
       ],
@@ -26,10 +26,11 @@
     },
     "design": {
       "skills": [
-        "platform-architecture-v2-cn"
+        "platform-architecture-v2-cn",
+        "reviewing-design-and-plans-cn"
       ],
-      "artifact": "docs/04-implementation/tasks/{task}/design.md",
-      "instruction": "依据确认的需求和当前实现，完成必要的接口、数据、兼容性与迁移设计，记录取舍。 使用 $platform-architecture-v2-cn 中适用的方法；非平台任务不扩展为平台架构设计。",
+      "artifact": "docs/04-implementation/tasks/{task}/design/README.md",
+      "instruction": "遵循 AGENTS.md 的阶段产物约定和当前阶段 Skill；读取其规定的参考与输出契约，使用已确认的上游产物。",
       "inputs": [
         "docs/04-implementation/tasks/{task}/prd.md"
       ],
@@ -45,10 +46,10 @@
         "trellis-update-spec"
       ],
       "artifact": "docs/05-validation/tasks/{task}/validation.md",
-      "instruction": "依据已确认的需求与设计，先拆解可验收任务并按需补充细化设计，再持续实现、测试、整改，更新规范和验证记录。不得擅自改变已确认的需求或设计。",
+      "instruction": "遵循 AGENTS.md 的阶段产物约定和当前阶段 Skill；读取其规定的参考与输出契约，使用已确认的上游产物。",
       "inputs": [
         "docs/04-implementation/tasks/{task}/prd.md",
-        "docs/04-implementation/tasks/{task}/design.md"
+        "docs/04-implementation/tasks/{task}/design/README.md"
       ],
       "review_skills": []
     },

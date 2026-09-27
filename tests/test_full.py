@@ -322,10 +322,13 @@ class FullWorkflowTests(unittest.TestCase):
     def test_install_and_upgrade_preserve_owner_files(self):
         (self.work / ".git").mkdir()
         templates = {
-            "AGENTS.md": b"template",
+            "AGENTS.md": b"template\n<!-- harness-stage-deliverables -->\nstage contract\n<!-- /harness-stage-deliverables -->",
             ".github/workflows/harness-full.yml": b"original",
         }
+        (self.work / "AGENTS.md").write_text("owner rules")
         changes = plan(self.work, {"full_harness/a.py": b"v1"}, templates, "revision1")
+        self.assertIn(b"owner rules", changes["AGENTS.md"])
+        self.assertIn(b"stage contract", changes["AGENTS.md"])
         for n, b in changes.items():
             p = self.work / n
             p.parent.mkdir(parents=True, exist_ok=True)
