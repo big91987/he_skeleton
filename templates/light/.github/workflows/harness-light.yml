@@ -1,4 +1,4 @@
-name: Light conversation
+name: Light development workflow
 on:
   workflow_dispatch:
     inputs:
@@ -54,33 +54,140 @@ jobs:
             const permitted = (await Promise.all(actors.map(allowed))).every(Boolean);
             core.setOutput('allowed', String(permitted));
             await core.summary.addRaw(permitted ? 'Authorized contributor: continue on the project Runner.' : 'Waiting for a contributor with write, maintain or admin permission to comment or start the task.').write();
-  conversation:
+  restore:
     needs: [authorize]
-    if: needs.authorize.outputs.allowed == 'true'
+    if: >-
+      needs.authorize.outputs.allowed == 'true'
+    # Keep all stage jobs on the same persistent Runner.
+    runs-on: [self-hosted, macOS, ARM64, he-full]
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      stage: ${{ steps.stage.outputs.stage }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Restore saved stage · no model call
+        id: stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LIGHT_PUBLIC: ${{ runner.temp }}/light-public-${{ github.run_id }}-restore
+        run: |
+          export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+          test -n "$FULL_STATE_ROOT" || { echo 'Configure FULL_STATE_ROOT first'; exit 1; }
+          python3 full_harness/light.py restore
+  requirements:
+    needs: [restore]
+    if: >-
+      needs.restore.result == 'success' && needs.restore.outputs.stage == 'requirements'
+    # Keep all stage jobs on the same persistent Runner.
     runs-on: [self-hosted, macOS, ARM64, he-full]
     timeout-minutes: 40
     permissions:
       contents: write
       issues: write
       pull-requests: write
+    outputs:
+      next_stage: ${{ steps.stage.outputs.next_stage }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Resume conversation · one Codex execution
+      - name: Requirements · resume Session
+        id: stage
         env:
           GH_TOKEN: ${{ github.token }}
-          LIGHT_PUBLIC: ${{ runner.temp }}/light-public-${{ github.run_id }}
+          LIGHT_PUBLIC: ${{ runner.temp }}/light-public-${{ github.run_id }}-requirements
         run: |
           export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
           test -n "$FULL_STATE_ROOT" || { echo 'Configure FULL_STATE_ROOT first'; exit 1; }
-          python3 full_harness/light.py
-      - name: Download documents
+          python3 full_harness/light.py requirements
+      - name: Download requirements documents
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: light-${{ github.run_id }}
-          path: ${{ runner.temp }}/light-public-${{ github.run_id }}
+          name: light-${{ github.run_id }}-requirements
+          path: ${{ runner.temp }}/light-public-${{ github.run_id }}-requirements
+          if-no-files-found: ignore
+          retention-days: 30
+  design:
+    needs: [restore, requirements]
+    if: >-
+      always() && needs.restore.result == 'success' &&
+      needs.requirements.result != 'failure' && needs.requirements.result != 'cancelled' &&
+      (needs.restore.outputs.stage == 'design' || needs.requirements.outputs.next_stage == 'design')
+    # Keep all stage jobs on the same persistent Runner.
+    runs-on: [self-hosted, macOS, ARM64, he-full]
+    timeout-minutes: 40
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      next_stage: ${{ steps.stage.outputs.next_stage }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Design · resume Session
+        id: stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LIGHT_PUBLIC: ${{ runner.temp }}/light-public-${{ github.run_id }}-design
+        run: |
+          export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+          test -n "$FULL_STATE_ROOT" || { echo 'Configure FULL_STATE_ROOT first'; exit 1; }
+          python3 full_harness/light.py design
+      - name: Download design documents
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: light-${{ github.run_id }}-design
+          path: ${{ runner.temp }}/light-public-${{ github.run_id }}-design
+          if-no-files-found: ignore
+          retention-days: 30
+  development:
+    needs: [restore, requirements, design]
+    if: >-
+      always() && needs.restore.result == 'success' &&
+      needs.requirements.result != 'failure' && needs.requirements.result != 'cancelled' &&
+      needs.design.result != 'failure' && needs.design.result != 'cancelled' &&
+      (needs.restore.outputs.stage == 'development' || needs.design.outputs.next_stage == 'development')
+    # Keep all stage jobs on the same persistent Runner.
+    runs-on: [self-hosted, macOS, ARM64, he-full]
+    timeout-minutes: 40
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      next_stage: ${{ steps.stage.outputs.next_stage }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Development · implement, check and repair
+        id: stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LIGHT_PUBLIC: ${{ runner.temp }}/light-public-${{ github.run_id }}-development
+        run: |
+          export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+          test -n "$FULL_STATE_ROOT" || { echo 'Configure FULL_STATE_ROOT first'; exit 1; }
+          python3 full_harness/light.py development
+      - name: Download development documents
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: light-${{ github.run_id }}-development
+          path: ${{ runner.temp }}/light-public-${{ github.run_id }}-development
           if-no-files-found: ignore
           retention-days: 30

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""One user message, one native Codex execution; no classifier or model reviewer."""
+"""Visible stage jobs sharing one native Session; no classifier or model reviewer."""
 
+import argparse
 import copy
 import fcntl
 import hashlib
@@ -21,6 +22,7 @@ from full_harness.runner import (
     event_input,
     framework_comment,
     new_state,
+    output,
     recover_session,
 )
 from full_harness.timeline import publish
@@ -85,9 +87,11 @@ def validate_result(session, state, result, message, sent):
     material = hashes(workspace, result["artifacts"])
     previous = STATES.index(state["stage"])
     current = STATES.index(result["next_state"])
-    if previous == 0 and current > 1:
-        raise ValueError("需求确认不能代替设计确认")
+    if current > previous + 1:
+        raise ValueError("下一阶段必须由对应 Job 执行，不能跨过阶段")
     if current > previous and state["stage"] in STAGES[:2]:
+        if state.get("start_stage", state["stage"]) != state["stage"]:
+            raise ValueError("上一阶段的确认不能代替本阶段确认，请先展示本阶段文档")
         document = state.get("documents", {}).get(state["stage"])
         if not document or not message.strip():
             raise ValueError("先展示本阶段文档，再由用户回复确认")
@@ -133,7 +137,7 @@ def apply_result(session, state, result, message, sent):
         for stage in STAGES[current:]:
             updated.get("approvals", {}).pop(stage, None)
     next_state = result["next_state"]
-    if material and next_state in STAGES[:2]:
+    if material and current == previous and next_state in STAGES[:2]:
         old = updated.get("documents", {}).get(next_state, {})
         if old.get("files") != material:
             updated.setdefault("documents", {})[next_state] = {
@@ -158,10 +162,12 @@ def apply_result(session, state, result, message, sent):
 
 
 def prompt(state, message):
+    stage = "development" if state["stage"] == "done" else state["stage"]
     packet = {
         "task": state["task"],
-        "stage": state["stage"],
+        "stage": stage,
         "message": message,
+        "handoff_from_previous_job": state.get("start_stage", stage) != stage,
         "documents": {
             s: list(d["files"]) for s, d in state.get("documents", {}).items()
         },
@@ -169,17 +175,17 @@ def prompt(state, message):
             s: list(d["files"]) for s, d in state.get("approvals", {}).items()
         },
         "project_entries": state["config"]["entries"],
-        "stages": {s: state["config"]["stages"][s] for s in STAGES},
+        "stage_instructions": state["config"]["stages"][stage],
         "checks": state["config"].get("checks", []),
     }
     return (
         "本轮采用三字段协议：next_state、message、artifacts。旧会话里的 status、awaiting_approval、delivered、approval_quote 等输出字段不再使用。"
-        "你直接与用户协作，每条消息只启动你这一次。首次读项目入口，后续恢复同一个原生 Session。三个阶段的 Skill 都可按需读取。"
+        "你直接与用户协作；本次执行只负责输入 stage 对应的阶段 Job，不做额外意图分类。首次读项目入口，后续及跨阶段都恢复同一个原生 Session。本轮仅开放当前阶段的 Skill，按需渐进读取。"
         "输入 stage 是本轮开始的位置；输出 next_state 是本轮结束后的接续位置。只有 requirements、design、development、done 四个值。"
         "澄清、提问、等待确认、遇到阻塞都停留在本阶段，在 message 直接解释或提问，等用户下一条回复再继续；没有额外的等待状态。"
         "需求和设计完成后，在 artifacts 提交真实文档，并在 message 请用户确认。你结合本条消息和上下文判断是否确认，不依赖固定词或命令。"
-        "用户明确确认已展示的需求或设计后，在同一次执行里进入下一阶段并工作；不能把需求确认当作设计确认。设计获确认后可在本轮完成全部研发并返回 done。"
-        "已有文档、原型或代码直接复用，缺必要决策才澄清。用户要修改前面已确认的内容，返回对应阶段修改并重新请审。"
+        "用户明确确认已展示的需求或设计后，返回相邻下一阶段且 artifacts=[]，结束当前 Job。框架会自动启动下一 Job 并恢复本 Session，不要在当前 Job 做下一阶段的工作。handoff_from_previous_job 为 true 时，原评论确认的是上一阶段；完成本阶段工作后展示文档并等待新确认，不能重复使用同一批准。只有研发 Job 可以返回 done。"
+        "已有文档、原型或代码直接复用，缺必要决策才澄清。用户要修改前面已确认的内容，返回对应阶段并说明；当前 Job 不代替前面阶段做修改，下一次消息从该阶段接续。"
         "设计按实际项目覆盖必要 UI/原型、架构和数据契约，不强迫所有产品做网页。"
         "研发在同一个进程尽量持续实现、格式化、lint、测试和整改；Python 修改运行 python3 full_harness/quality.py fix，再 check。"
         "只有实际完成研发才返回 done，并生成配置指定的验证记录。原生 Stop Hook 会检查，失败让你在同一次执行中修复；环境阻塞返回 development 并说明。"
@@ -203,6 +209,7 @@ def execute(source, session, state, message, event_id, sent=None):
     state["active_event"] = event_id
     write_json(session / "state.json", state)
     evidence = session / "turns" / str(state["turn"])
+    stage = "development" if state["stage"] == "done" else state["stage"]
     context = {
         "state": copy.deepcopy(state),
         "message": message,
@@ -214,16 +221,14 @@ def execute(source, session, state, message, event_id, sent=None):
         "config": state["config"],
         "controls": state["controls"],
         "task": state["task"],
-        "stage": "development",
+        "stage": stage,
         "node_path": os.environ.get("NODE_PATH", ""),
         "deadline_monotonic": time.monotonic() + state["config"]["agent_timeout"],
     }
     context_path = evidence / "context.json"
     write_json(context_path, context)
-    allowed = list(
-        dict.fromkeys(n for s in STAGES for n in state["config"]["stages"][s]["skills"])
-    )
-    print("当前阶段：" + state["stage"] + " · 本条消息一次 Codex 执行", flush=True)
+    allowed = state["config"]["stages"][stage]["skills"]
+    print("当前阶段：" + stage + " · 本阶段一次 Codex 执行", flush=True)
     result, sid = invoke(
         source,
         session / "workspace",
@@ -231,10 +236,11 @@ def execute(source, session, state, message, event_id, sent=None):
         prompt(state, message),
         evidence / "agent",
         session_id=recover_session(session),
-        hook_context=context_path,
+        hook_context=context_path if stage == "development" else None,
         hook_script="light_hook.py",
         schema_override=SCHEMA,
         skills=allowed,
+        timeout_override=state["config"]["agent_timeout"],
     )
     apply_result(session, state, result, message, sent)
     state["session_id"] = sid
@@ -310,7 +316,9 @@ def report(session, state, error=None):
     write_json(session / "state.json", state)
 
 
-def main():
+def main(job="restore"):
+    if job not in ["restore", *STAGES]:
+        raise ValueError("Unknown stage job")
     source = Path(__file__).resolve().parents[1]
     event = read_json(os.environ["GITHUB_EVENT_PATH"])
     if framework_comment(event):
@@ -364,11 +372,54 @@ def main():
                 else "run-" + run_id
             )
         )
-        if event_id in state.get("handled", []):
-            if event_id != state["handled"][-1]:
-                return
-        else:
-            state["run_id"] = run_id
+        if job == "restore":
+            # Old single-job events stay consumed. Do not silently rerun history.
+            if event_id in state.get("handled", []):
+                output("stage", "")
+                return ""
+            if state.get("event_id") != event_id:
+                if any(x.startswith(event_id + ":") for x in state.get("handled", [])):
+                    output("stage", "")
+                    return ""
+                state.update(
+                    event_id=event_id,
+                    run_id=run_id,
+                    start_stage="development"
+                    if state["stage"] == "done"
+                    else state["stage"],
+                )
+            elif state["run_id"] != run_id:
+                output("stage", "")
+                return ""
+            write_json(state_path, state)
+            output("stage", state["start_stage"])
+            print("恢复阶段：" + state["stage"] + "（不调用模型）", flush=True)
+            return state["start_stage"]
+        if state.get("event_id") != event_id or state.get("run_id") != run_id:
+            raise ValueError("请先在本轮 restore Job 恢复任务，再执行对应阶段")
+        stage_event = event_id + ":" + job
+        handled = state.get("handled", [])
+        if (
+            stage_event not in handled
+            and state["stage"] != job
+            and not (job == "development" and state["stage"] == "done")
+        ):
+            raise ValueError("任务当前阶段与 Job 不匹配")
+        if stage_event in handled and (
+            stage_event != handled[-1] or state.get("active_event")
+        ):
+            next_stage = next(
+                (
+                    h["to"]
+                    for h in reversed(state["history"])
+                    if h.get("event_id") == stage_event
+                    and h["to"] in STAGES
+                    and STAGES.index(h["to"]) > STAGES.index(job)
+                ),
+                "",
+            )
+            output("next_stage", next_stage)
+            return next_stage
         if state.get("pr_number"):
             pr = api(repo, "pulls/" + str(state["pr_number"]))
             if pr.get("merged_at") or pr.get("state") == "closed":
@@ -379,7 +430,7 @@ def main():
                 session,
                 state,
                 message,
-                event_id,
+                stage_event,
                 event.get("comment", {}).get("created_at"),
             )
             if state["stage"] == "done":
@@ -399,7 +450,17 @@ def main():
             raise
         state.pop("error", None)
         report(session, state)
+        next_stage = (
+            state["stage"]
+            if state["stage"] in STAGES
+            and STAGES.index(state["stage"]) > STAGES.index(job)
+            else ""
+        )
+        output("next_stage", next_stage)
+        return next_stage
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("job", choices=["restore", *STAGES])
+    main(parser.parse_args().job)

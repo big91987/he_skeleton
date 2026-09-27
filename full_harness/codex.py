@@ -132,7 +132,9 @@ def invoke(
         read_json(hook_context)["config"]["agent_timeout"] if hook_context else 600
     )
     if review:
-        timeout = timeout_override or 480
+        timeout = 480
+    if timeout_override is not None:
+        timeout = timeout_override
     log = evidence / "agent.jsonl"
     from .console import Console
 
