@@ -25,7 +25,7 @@ from full_harness.runner import (
     output,
     recover_session,
 )
-from full_harness.timeline import AgentReplies, publish
+from full_harness.timeline import AgentReplies, progress_event, publish
 
 STAGES = ["requirements", "design", "development"]
 STATES = [*STAGES, "done"]
@@ -299,20 +299,7 @@ def report(session, state, error=None):
                 event = json.loads(line)
             except ValueError:
                 continue
-            if not isinstance(event, dict):
-                continue
-            item = event.get("item") or {}
-            if event.get("type") in {
-                "thread.started",
-                "turn.started",
-                "turn.completed",
-                "turn.failed",
-                "error",
-            } or (
-                event.get("type") == "item.completed"
-                and isinstance(item, dict)
-                and item.get("type") == "agent_message"
-            ):
+            if progress_event(event):
                 events.append(event)
     if events:
         rendered = json.dumps(events, ensure_ascii=False, indent=2)

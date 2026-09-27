@@ -60,6 +60,38 @@ def find_comment(api, state, marker):
         page += 1
 
 
+def progress_event(event):
+    if not isinstance(event, dict):
+        return False
+    item = event.get("item") or {}
+    return event.get("type") in {
+        "thread.started",
+        "turn.started",
+        "turn.completed",
+        "turn.failed",
+        "error",
+    } or (
+        event.get("type") == "item.completed"
+        and isinstance(item, dict)
+        and item.get("type") == "agent_message"
+    )
+
+
+def folded_chunks(text):
+    """Keep all content; bounded escaped chunks fit GitHub's comment limit."""
+    chunks, chunk, size = [], [], 0
+    for character in text:
+        escaped = html.escape(character, quote=False)
+        length = len(escaped.encode("utf-8"))
+        if size + length > 24000:
+            chunks.append("".join(chunk))
+            chunk, size = [], 0
+        chunk.append(escaped)
+        size += length
+    chunks.append("".join(chunk))
+    return chunks
+
+
 class AgentReplies:
     """Accumulate Agent progress in one folded comment; leave the final separate."""
 
@@ -71,10 +103,30 @@ class AgentReplies:
         self.record = (
             read_json(record_path) if record_path.exists() else {"messages": {}}
         )
+        if "events" not in self.record:
+            self.record["events"] = []
+            log = self.path.parent / "agent/agent.jsonl"
+            if self.path.exists() and log.exists():
+                for line in log.read_text().splitlines():
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        continue
+                    if progress_event(event):
+                        self.record["events"].append(event)
+            else:
+                self.record["events"] = [
+                    self.record[k]
+                    for k in ("message_event", "execution_event")
+                    if k in self.record
+                ]
         self.pending = None
 
     def __call__(self, event):
         kind = event.get("type")
+        if progress_event(event):
+            self.record["events"].append(event)
+            write_json(self.path, self.record)
         if kind in {"turn.started", "turn.completed", "turn.failed", "error"}:
             self.record["execution_event"] = event
             self.record["execution_status"] = {
@@ -91,7 +143,6 @@ class AgentReplies:
             return
         if kind == "item.completed" and item.get("type") == "agent_message":
             self.flush()
-            self.record["message_event"] = event
             text = item.get("text", "")
             try:
                 value = json.loads(text)
@@ -100,7 +151,7 @@ class AgentReplies:
             if isinstance(value, dict):
                 text = value.get("message", "")
             if isinstance(text, str) and text.strip():
-                self.pending = (item["id"], text)
+                self.pending = ("event-" + str(len(self.record["events"])), text)
             if item.get("phase") == "commentary" or not isinstance(value, dict):
                 self.flush()
         elif (
@@ -130,62 +181,65 @@ class AgentReplies:
 
     def update(self):
         marker = f"<!-- harness-event:progress:{self.state['run_id']}:{self.state['turn']} -->"
-        history = "\n\n---\n\n".join(
-            html.escape(message, quote=False)
-            for message in self.record["messages"].values()
-        )
-        if len(history) > 30000:
-            history = "更早进展见运行日志。\n\n" + history[-30000:]
-        text = next(reversed(self.record["messages"].values()), "")
-        latest = html.escape(text.strip().splitlines()[0][:140]) if text else ""
-        events = [
-            self.record[k]
-            for k in ("message_event", "execution_event")
-            if k in self.record
-        ]
-        raw = json.dumps(events, ensure_ascii=False, indent=2)
+        history = "\n\n---\n\n".join(self.record["messages"].values())
+        raw = json.dumps(self.record["events"], ensure_ascii=False, indent=2)
         for path in self.private_paths:
             raw = raw.replace(str(path), "<private-runtime>")
-        raw_block = (
-            "<details><summary>最近消息与执行事件（完整 JSON）</summary>\n\n<pre>"
-            + html.escape(raw)
-            + "</pre>\n\n</details>"
-            if len(html.escape(raw)) < 20000
-            else "完整事件较长，请查看运行日志及本轮结束后的下载包。"
-        )
+        history_parts, raw_parts = folded_chunks(history), folded_chunks(raw)
         status = self.record.get("execution_status", "执行中")
         url = f"https://github.com/{self.state['repo']}/actions/runs/{self.state['run_id']}"
-        body = (
-            f"{marker}\n**{status}** · 阶段：`{self.state['stage']}`\n\n"
-            f"<details><summary>Agent 进展 · {latest}</summary>\n\n"
-            f"{history}\n\n</details>\n\n{raw_block}\n\n[运行日志]({url})"
+        ids = self.record.setdefault(
+            "comment_ids",
+            [self.record["comment_id"]] if self.record.get("comment_id") else [],
         )
         try:
             write_json(self.path, self.record)
-            comment_id = self.record.get("comment_id")
-            if not comment_id:
-                found = find_comment(self.api, self.state, marker)
-                comment_id = found["id"] if found else None
-            if comment_id:
-                self.api(
-                    self.state["repo"],
-                    f"issues/comments/{comment_id}",
-                    "PATCH",
-                    {"body": body},
+            for index in range(max(len(history_parts), len(raw_parts))):
+                part_marker = (
+                    marker if index == 0 else marker[:-4] + f":part:{index + 1} -->"
                 )
-            else:
-                result = self.api(
-                    self.state["repo"],
-                    f"issues/{self.state['task']['number']}/comments",
-                    "POST",
-                    {"body": body},
-                )
-                comment_id = result["id"]
-            self.record["comment_id"] = comment_id
-            write_json(self.path, self.record)
+                suffix = "" if index == 0 else f" · 续 {index + 1}"
+                body = f"{part_marker}\n**{status}** · 阶段：`{self.state['stage']}` · 第 {self.state['turn']} 轮{suffix}\n\n"
+                if index < len(history_parts):
+                    body += (
+                        f"<details><summary>本轮累计进展（{len(self.record['messages'])} 条）{suffix}</summary>\n\n"
+                        + history_parts[index]
+                        + "\n\n</details>\n\n"
+                    )
+                if index < len(raw_parts):
+                    body += (
+                        f"<details><summary>本轮累计原始事件（完整 JSON）{suffix}</summary>\n\n<pre>"
+                        + raw_parts[index]
+                        + "</pre>\n\n</details>\n\n"
+                    )
+                body += f"[运行日志]({url})"
+                if max(len(history_parts), len(raw_parts)) > 1:
+                    body += "\n\n完整内容超过单条评论容量，按本轮编号分段保留；JSON 按顺序拼接即为完整内容。"
+                comment_id = ids[index] if index < len(ids) else None
+                if not comment_id:
+                    found = find_comment(self.api, self.state, part_marker)
+                    comment_id = found["id"] if found else None
+                if comment_id:
+                    self.api(
+                        self.state["repo"],
+                        f"issues/comments/{comment_id}",
+                        "PATCH",
+                        {"body": body},
+                    )
+                else:
+                    result = self.api(
+                        self.state["repo"],
+                        f"issues/{self.state['task']['number']}/comments",
+                        "POST",
+                        {"body": body},
+                    )
+                    comment_id = result["id"]
+                if index == len(ids):
+                    ids.append(comment_id)
+                self.record["comment_id"] = ids[0]
+                write_json(self.path, self.record)
         except Exception:
-            # Progress transport must not stop the Agent. Full text remains in
-            # private JSONL and Actions logs; later progress retries this comment.
+            # Retry transport without rerunning the Agent or dropping its history.
             print(
                 "[harness] Agent 进度暂未同步到 Issue，请查看 Actions 日志。",
                 flush=True,
