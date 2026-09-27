@@ -66,7 +66,18 @@ def authorized(repo, actor):
     return permission.get("permission") in {"admin", "maintain", "write"}
 
 
+def framework_comment(event):
+    return (
+        event.get("comment", {})
+        .get("body", "")
+        .lstrip()
+        .startswith("<!-- harness-event:")
+    )
+
+
 def event_input(event, repo, actor, event_name):
+    if framework_comment(event):
+        raise ValueError("Framework comments are not user input")
     if event.get("sender", {}).get("type") == "Bot":
         raise ValueError("Bot events cannot start the Runner")
     if not authorized(repo, actor) or not authorized(
@@ -979,8 +990,12 @@ def report(session, state):
                 document_rows = [
                     "",
                     "<details><summary>📄 "
-                    + NAMES[stage]
-                    + "产物（点击展开） · "
+                    + (
+                        "参考材料（已有文件）"
+                        if done.get("mode") == "reuse"
+                        else NAMES[stage] + "产物（点击展开）"
+                    )
+                    + " · "
                     + name
                     + "</summary>",
                     "",
@@ -1048,8 +1063,23 @@ def report(session, state):
         message = state.get("reason", "")
     reply_rows = [message] if message else []
     if not dialogue and state["status"] == "awaiting_approval":
-        reply_rows += stage_documents.get(stage, [])
-        reply_rows += ["", "请确认以上产物，或直接提出修改意见。"]
+        done = state["completed"].get(stage, {})
+        if done.get("mode") == "reuse":
+            reply_rows += ["", "本阶段复用已有材料作为基线，未重新生成阶段文档。"]
+            if "issue" in done.get("evidence", {}):
+                reply_rows += [
+                    "",
+                    "<details><summary>本次需求基线：Issue 正文</summary>",
+                    "",
+                    state["task"].get("body", ""),
+                    "",
+                    "</details>",
+                ]
+            reply_rows += stage_documents.get(stage, [])
+            reply_rows += ["", "请确认这份基线是否可以进入下一阶段，或提出修改意见。"]
+        else:
+            reply_rows += stage_documents.get(stage, [])
+            reply_rows += ["", "请确认以上产物，或直接提出修改意见。"]
     if not dialogue and state.get("pr_url"):
         reply_rows += ["", "交付 PR：" + state["pr_url"]]
     if not reply_rows:
@@ -1071,6 +1101,9 @@ def main():
     args = parser.parse_args()
     source = Path(__file__).resolve().parents[1]
     event = read_json(os.environ["GITHUB_EVENT_PATH"])
+    if framework_comment(event):
+        print("Ignoring framework-generated comment.", flush=True)
+        return
     repo = os.environ["GITHUB_REPOSITORY"]
     number, instruction = event_input(
         event, repo, os.environ["GITHUB_ACTOR"], os.environ["GITHUB_EVENT_NAME"]

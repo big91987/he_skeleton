@@ -235,6 +235,22 @@ class ApprovalTests(unittest.TestCase):
         self.assertIn("contract.json", text)
         self.assertTrue((self.root / "public/design/contract.json").is_file())
 
+    def test_reused_materials_are_not_presented_as_new_outputs(self):
+        self.state["task"]["body"] = "Search by book title"
+        self.state["completed"]["requirements"] = {
+            "mode": "reuse",
+            "summary": "Issue is sufficient",
+            "evidence": {"issue": "hash", "prd.md": "hash"},
+        }
+        runner.request_approval(self.root, self.state, "requirements")
+        with patch.object(runner, "api", return_value={"id": 100}) as api:
+            runner.report(self.root, self.state)
+        body = api.call_args.args[3]["body"]
+        self.assertIn("Search by book title", body)
+        self.assertIn("参考材料", body)
+        self.assertNotIn("需求产物", body)
+        self.assertIn("未重新生成", body)
+
     def test_running_checkpoints_are_private(self):
         with patch.object(runner, "api") as api:
             runner.report(self.root, self.state)
