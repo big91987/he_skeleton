@@ -266,7 +266,10 @@ class LightTests(unittest.TestCase):
         sid = "00000000-0000-4000-8000-000000000001"
         expected = result(message="是否需要搜索？")
 
-        def process(argv, workspace, env, log, timeout, prompt, stream):
+        forwarded = []
+
+        def process(argv, workspace, env, log, timeout, prompt, stream, on_event):
+            on_event({"type": "turn.started"})
             write_json(Path(argv[argv.index("--output-last-message") + 1]), expected)
             log.write_text(
                 __import__("json").dumps({"type": "thread.started", "thread_id": sid})
@@ -288,7 +291,9 @@ class LightTests(unittest.TestCase):
                 "需求",
                 self.session / "evidence",
                 schema_override=light.SCHEMA,
+                on_event=forwarded.append,
             )
+        self.assertEqual(forwarded, [{"type": "turn.started"}])
         self.assertEqual(actual, expected)
         self.assertEqual(actual_id, sid)
 
@@ -387,6 +392,7 @@ class LightTests(unittest.TestCase):
     def test_issue_conversation_reloads_checkpoint_resumes_and_publishes_once(self):
         """Fake only Codex/GitHub; exercise the actual entry, disk state and replies."""
         import hashlib
+        import json
         import os
 
         source = self.session / "source"
@@ -428,6 +434,10 @@ class LightTests(unittest.TestCase):
             if method == "POST":
                 replies.append(data["body"])
                 return {"id": len(replies)}
+            if method == "PATCH":
+                comment_id = int(path.rsplit("/", 1)[1])
+                replies[comment_id - 1] = data["body"]
+                return {"id": comment_id}
             if path.startswith("issues/1/comments?"):
                 return []
             raise AssertionError(path)
@@ -438,9 +448,62 @@ class LightTests(unittest.TestCase):
             self.assertEqual(
                 options["hook_context"] is not None, current == "development"
             )
-            self.assertEqual(options["session_id"], "same-session" if replies else None)
+            self.assertEqual(
+                options["session_id"],
+                "same-session" if (home / "codex-session.json").exists() else None,
+            )
             self.assertNotIn("SKILL_BODY_NOT_FOR_PROMPT", prompt)
             output = next(outputs)
+            before = len(replies)
+            stream = options["on_event"]
+            stream(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "p1",
+                        "type": "agent_message",
+                        "text": "开始核对现有文件",
+                    },
+                }
+            )
+            self.assertEqual(len(replies), before + 1)
+            stream(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "p2",
+                        "type": "agent_message",
+                        "text": json.dumps(result(message="发现需要核对的接口")),
+                    },
+                }
+            )
+            stream(
+                {
+                    "type": "item.started",
+                    "item": {
+                        "id": "tool",
+                        "type": "command_execution",
+                        "command": "PRIVATE_TOOL_CONTENT",
+                    },
+                }
+            )
+            self.assertEqual(len(replies), before + 1)
+            self.assertIn("<details>", replies[-1])
+            self.assertIn("开始核对现有文件", replies[-1])
+            self.assertIn("发现需要核对的接口", replies[-1])
+            self.assertNotIn("PRIVATE_TOOL_CONTENT", replies[-1])
+            stream(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "final",
+                        "type": "agent_message",
+                        "text": json.dumps(output),
+                    },
+                }
+            )
+            stream({"type": "turn.completed"})
+            self.assertEqual(len(replies), before + 1)
             for name in output["artifacts"]:
                 (workspace / name).write_text("unchanged " + name)
             write_json(evidence / "result.json", output)
@@ -508,7 +571,7 @@ class LightTests(unittest.TestCase):
                     else "requirements",
                 )
                 self.assertEqual(agent.call_count, expected_calls)
-                self.assertEqual(len(replies), expected_calls)
+                self.assertEqual(len(replies), 2 * expected_calls)
             self.assertEqual(saved["approvals"]["requirements"]["message"], "ok 继续吧")
             self.assertIn("design", saved["documents"])
             self.assertIn("design", saved["approvals"])
@@ -517,5 +580,5 @@ class LightTests(unittest.TestCase):
             while route in light.STAGES:
                 route = light.main(route)
             self.assertEqual(agent.call_count, 7)
-            self.assertEqual(len(replies), 7)
+            self.assertEqual(len(replies), 14)
             self.assertEqual(read_json(session / "state.json"), saved)

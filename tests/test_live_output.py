@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import subprocess
 import sys
 import tempfile
@@ -26,7 +27,18 @@ class LiveOutputTests(unittest.TestCase):
 
             console = Console()
             result = []
-            script = 'import time; print("first-event",flush=True); time.sleep(1); print("::error::literal",flush=True)'
+            events = []
+            first = json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "p1",
+                        "type": "agent_message",
+                        "text": "first-event",
+                    },
+                }
+            )
+            script = f'import time; print({first!r},flush=True); time.sleep(1); print("::error::literal",flush=True)'
             with contextlib.redirect_stdout(console):
                 t = threading.Thread(
                     target=lambda: result.append(
@@ -37,6 +49,7 @@ class LiveOutputTests(unittest.TestCase):
                             log,
                             5,
                             stream=True,
+                            on_event=events.append,
                         )
                     )
                 )
@@ -49,7 +62,8 @@ class LiveOutputTests(unittest.TestCase):
                 finally:
                     t.join(6)
             self.assertEqual(result, [0])
-            self.assertEqual(log.read_text(), "first-event\n::error::literal\n")
+            self.assertEqual(log.read_text(), first + "\n::error::literal\n")
+            self.assertEqual(events, [json.loads(first)])
             self.assertIn("[codex] ::error::literal", console.getvalue())
 
     def test_timeout_retains_output_and_stops_stream(self):

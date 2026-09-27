@@ -1,7 +1,9 @@
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import Mock
 
-from full_harness.timeline import publish
+from full_harness.timeline import AgentReplies, publish
 
 
 class TimelineTests(unittest.TestCase):
@@ -70,3 +72,57 @@ class TimelineTests(unittest.TestCase):
             publish(forged, original, "[PRD](<private-runtime>/prd.md)").endswith("-10")
         )
         self.assertEqual(forged.call_args.args[2], "POST")
+
+    def test_progress_recovers_lost_post_and_updates_one_fold_without_losing_history(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "progress.json"
+            comments = []
+            posts = []
+            patches = []
+
+            def api(repo, target, method="GET", data=None):
+                if method == "GET":
+                    return comments
+                if method == "POST":
+                    posts.append(data["body"])
+                    comments.append(
+                        {"id": 77, "user": {"type": "Bot"}, "body": data["body"]}
+                    )
+                    raise RuntimeError("Response lost after GitHub accepted POST")
+                patches.append(data["body"])
+                comments[0]["body"] = data["body"]
+                return {"id": 77}
+
+            first = AgentReplies(api, self.state, path, ("/private/task",))
+            first(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "one",
+                        "type": "agent_message",
+                        "phase": "commentary",
+                        "text": "先检查 /private/task/workspace",
+                    },
+                }
+            )
+            resumed = AgentReplies(api, self.state, path, ("/private/task",))
+            resumed(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "two",
+                        "type": "agent_message",
+                        "phase": "commentary",
+                        "text": "找到接口差异",
+                    },
+                }
+            )
+            self.assertEqual(len(posts), 1)
+            self.assertEqual(len(patches), 1)
+            self.assertIn("先检查", patches[0])
+            self.assertIn("找到接口差异", patches[0])
+            self.assertIn("<details>", patches[0])
+            self.assertNotIn("/private/task", patches[0])
+            self.assertEqual(resumed.record["comment_id"], 77)

@@ -25,7 +25,7 @@ from full_harness.runner import (
     output,
     recover_session,
 )
-from full_harness.timeline import publish
+from full_harness.timeline import AgentReplies, publish
 
 STAGES = ["requirements", "design", "development"]
 STATES = [*STAGES, "done"]
@@ -181,6 +181,7 @@ def prompt(state, message):
     return (
         "本轮采用三字段协议：next_state、message、artifacts。旧会话里的 status、awaiting_approval、delivered、approval_quote 等输出字段不再使用。"
         "你直接与用户协作；本次执行只负责输入 stage 对应的阶段 Job，不做额外意图分类。首次读项目入口，后续及跨阶段都恢复同一个原生 Session。本轮仅开放当前阶段的 Skill，按需渐进读取。"
+        "沟通方式：开始工作前先用一两句简短说明当前阶段、对用户消息的理解和接下来做什么；工作中仅在有实质进展、发现或阻塞时主动说明，不逐条复述工具操作。过程回复使用面向用户的 commentary 文本，会直接转发到 Issue；只有最终回复使用三字段 JSON。不要等待做完才首次回应，也不要机械套用固定开场白。"
         "输入 stage 是本轮开始的位置；输出 next_state 是本轮结束后的接续位置。只有 requirements、design、development、done 四个值。"
         "澄清、提问、等待确认、遇到阻塞都停留在本阶段，在 message 直接解释或提问，等用户下一条回复再继续；没有额外的等待状态。"
         "需求和设计完成后，在 artifacts 提交真实文档，并在 message 请用户确认。你结合本条消息和上下文判断是否确认，不依赖固定词或命令。"
@@ -241,6 +242,9 @@ def execute(source, session, state, message, event_id, sent=None):
         schema_override=SCHEMA,
         skills=allowed,
         timeout_override=state["config"]["agent_timeout"],
+        on_event=AgentReplies(
+            api, state, evidence / "issue-progress.json", (session, Path.home())
+        ),
     )
     apply_result(session, state, result, message, sent)
     state["session_id"] = sid
