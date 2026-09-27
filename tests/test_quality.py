@@ -1,3 +1,4 @@
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,21 @@ class PythonQualityTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
+        # Execute real Ruff, but send child output through unittest's failure buffer.
+        real_run = quality.subprocess.run
+
+        def captured(*args, **kwargs):
+            completed = real_run(
+                *args,
+                **kwargs,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            print(completed.stdout, end="")
+            return completed
+
+        self.enterContext(patch.object(quality.subprocess, "run", side_effect=captured))
 
     def test_check_rejects_unformatted_code_without_writing(self):
         (self.root / "app.py").write_text("x=1;print(x)\n")

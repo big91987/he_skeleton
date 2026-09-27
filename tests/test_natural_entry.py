@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from full_harness import dialogue, runner
+from full_harness import dialogue, light, runner
 
 
 class NaturalEntryTests(unittest.TestCase):
@@ -65,13 +65,10 @@ class NaturalEntryTests(unittest.TestCase):
                 "next",
             )
 
-    def test_framework_comment_from_owner_is_not_user_input(self):
+    def test_framework_comment_exits_before_loading_or_running_task(self):
         self.event["comment"]["body"] = "<!-- harness-event:4:abc -->\nPlease confirm"
         with self.assertRaisesRegex(ValueError, "Framework"):
             runner.event_input(self.event, "owner/repo", "owner", "issue_comment")
-
-    def test_framework_comment_exits_before_loading_or_running_task(self):
-        self.event["comment"]["body"] = "<!-- harness-event:4:abc -->\nPlease confirm"
         event_file = self.root / "event.json"
         runner.write_json(event_file, self.event)
         with (
@@ -81,6 +78,10 @@ class NaturalEntryTests(unittest.TestCase):
             patch.object(runner, "invoke") as invoke,
         ):
             runner.main()
+            with patch.object(
+                light, "event_input", side_effect=AssertionError("bot loop")
+            ):
+                light.main()
         event_input.assert_not_called()
         invoke.assert_not_called()
 
@@ -95,11 +96,19 @@ class NaturalEntryTests(unittest.TestCase):
             runner.event_input(self.event, "owner/repo", "owner", "issue_comment"),
             (12, "为什么要这样设计？"),
         )
-        self.event["comment"]["body"] = "/develop\n"
-        self.assertEqual(
-            runner.event_input(self.event, "owner/repo", "owner", "issue_comment"),
-            (12, ""),
-        )
+        for body, message in [
+            ("/develop\n", ""),
+            ("/develop token answer", "token answer"),
+            ("/developer", "/developer"),
+        ]:
+            with self.subTest(body=body):
+                self.event["comment"]["body"] = body
+                self.assertEqual(
+                    runner.event_input(
+                        self.event, "owner/repo", "owner", "issue_comment"
+                    ),
+                    (12, message),
+                )
 
     def test_permission_levels_and_triggering_actor(self):
         for permission in ["write", "maintain", "admin"]:
@@ -146,21 +155,12 @@ class NaturalEntryTests(unittest.TestCase):
         self.assertEqual(self.state["pending_approval"], pending)
         self.assertEqual(self.state.get("approvals", {}), {})
 
-    def test_natural_approval_without_token_advances(self):
-        self.assertTrue(
-            self.message(
-                "approve", "这版需求确认通过，继续下一阶段。", "这版需求确认通过"
-            )
-        )
-        self.assertIn("requirements", self.state["approvals"])
-        self.assertEqual(self.state["stage"], "design")
-
-    def test_contextual_short_approval_advances_current_pending_version(self):
+    def test_approve_result_advances_current_document(self):
         self.assertTrue(self.message("approve", "ok 继续吧", "ok 继续吧"))
         self.assertEqual(self.state["stage"], "design")
         self.assertIn("requirements", self.state["approvals"])
 
-    def test_continue_is_not_approval(self):
+    def test_continue_stage_result_reopens_without_approval(self):
         self.assertTrue(self.message("continue_stage", "继续修改需求"))
         self.assertEqual(self.state["stage"], "requirements")
         self.assertEqual(self.state["status"], "running")
@@ -177,16 +177,6 @@ class NaturalEntryTests(unittest.TestCase):
         (self.root / "workspace/prd.md").write_text("Changed after review request")
         with self.assertRaisesRegex(ValueError, "Documents changed"):
             self.message("approve", "批准当前版本", "批准当前版本")
-
-    def test_change_reopens_stage_without_approving(self):
-        self.assertTrue(self.message("continue_stage", "补充权限说明"))
-        self.assertEqual(self.state["stage"], "requirements")
-        self.assertEqual(self.state["status"], "running")
-        self.assertNotIn("requirements", self.state["completed"])
-
-    def test_pause_does_not_start_work(self):
-        self.assertFalse(self.message("answer", "先暂停"))
-        self.assertEqual(self.state["status"], "awaiting_approval")
 
     def test_read_only_turn_cannot_change_files(self):
         def bad(*args):

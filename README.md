@@ -93,10 +93,12 @@ Session 独立于进程和 Job。第一版用持久化任务历史＋工作区�
 
 ## 运维与验证
 
+测试范围、删减依据和运行方式见 [测试维护清单](tests/README.md)。离线脚本回归不能代替真实 Agent 和产品验收。
+
 在 Runner 的 `runtime/` 目录执行 `./svc.sh status`、`./svc.sh stop` 或 `./svc.sh start`。Mac 需保持开机、联网，才能接新任务。
 
 ```sh
-python3 -m unittest discover -s tests -v
+python3 -m unittest discover -s tests -b
 node --check harness/browser.cjs
 ```
 

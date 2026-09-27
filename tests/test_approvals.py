@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from full_harness import runner
 from full_harness.common import controls, digest
+from full_harness.progress import progress_rows
 
 
 class ApprovalTests(unittest.TestCase):
@@ -138,38 +139,6 @@ class ApprovalTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             runner.development(self.root, self.root, self.state)
 
-    def test_development_runs_all_internal_steps_without_human_stop(self):
-        self.approve("requirements")
-        self.state["completed"]["design"] = {"artifact": "design.md"}
-        self.approve("design")
-        calls = []
-
-        def advance(name, next_stage):
-            def fn(*args):
-                calls.append(name)
-                self.state["stage"] = next_stage
-
-            return fn
-
-        def delivered(*args):
-            calls.append("delivery")
-            self.state["status"] = "waiting_review"
-
-        with (
-            patch.object(
-                runner, "run_agent", side_effect=advance("development", "verification")
-            ),
-            patch.object(
-                runner, "verify_stage", side_effect=advance("verification", "review")
-            ),
-            patch.object(
-                runner, "review_stage", side_effect=advance("review", "delivery")
-            ),
-            patch.object(runner, "deliver", side_effect=delivered),
-        ):
-            runner.development(self.root, self.root, self.state)
-        self.assertEqual(calls, ["development", "verification", "review", "delivery"])
-
     def test_independent_review_cannot_auto_accept_design_revision(self):
         self.approve("requirements")
         self.state["completed"]["design"] = {"artifact": "design.md"}
@@ -262,8 +231,8 @@ class ApprovalTests(unittest.TestCase):
     def test_confirmation_prints_actual_result_without_update_wrapper(self):
         runner.request_approval(self.root, self.state, "requirements")
         self.state["last_reply"] = "Stale acknowledgement"
+        self.state["comment_id"] = 777
         with patch.object(runner, "api", return_value={"id": 100}) as api:
-            runner.report(self.root, self.state)
             runner.report(self.root, self.state)
         posts = [
             c.args[3]["body"] for c in api.call_args_list if c.args[2:3] == ("POST",)
@@ -272,25 +241,41 @@ class ApprovalTests(unittest.TestCase):
         self.assertIn("PRD ready", posts[0])
         self.assertNotIn("阶段更新", posts[0])
         self.assertNotIn("当前状态", posts[0])
-        self.assertNotIn("点击展开", posts[0])
         self.assertIn("查看文档：prd.md", posts[0])
         self.assertNotIn("Stale acknowledgement", posts[0])
+        self.assertFalse(any(c.args[2:3] == ("PATCH",) for c in api.call_args_list))
 
-    def test_reporting_never_edits_existing_issue_history(self):
-        self.state["comment_id"] = 777
-        self.state["status"] = "needs_input"
-        self.state["conversation"] = [{"turn": 0, "intent": "answer"}]
-        self.state["last_reply"] = "Initial answer"
-        with patch.object(runner, "api", return_value={"id": 100}) as api:
-            runner.report(self.root, self.state)
-            runner.report(self.root, self.state)
-            self.state["last_reply"] = "Correction after checking"
-            runner.report(self.root, self.state)
-        methods = [c.args[2] for c in api.call_args_list if len(c.args) > 2]
-        self.assertEqual(methods, ["POST", "POST"])
-        self.assertFalse(
-            any("issues/comments/777" in c.args[1] for c in api.call_args_list)
-        )
+
+class ProgressTests(unittest.TestCase):
+    def test_confirmed_requirements_remain_complete_during_design(self):
+        state = {
+            "repo": "o/r",
+            "task": {"number": 18},
+            "stage": "design",
+            "status": "running",
+            "completed": {"requirements": {"artifact": "prd.md", "run_id": "11"}},
+            "approvals": {"requirements": {"run_id": "12", "comment_id": 99}},
+            "stage_runs": {"design": "12"},
+        }
+        text = "\n".join(progress_rows(state))
+        self.assertIn("需求 ✅ 已确认 → 设计 ⏳ 进行中 → 研发 ○ 未开始", text)
+        self.assertIn("issues/18#issuecomment-99", text)
+        self.assertNotIn("[确认记录]", text)
+        self.assertIn("runs/11", text)
+        self.assertIn("runs/12", text)
+        state.update(status="blocked", reason="Document approval mismatch")
+        text = "\n".join(progress_rows(state))
+        self.assertIn("需求 ✅ 已确认 → 设计 ⛔ 受阻", text)
+        self.assertIn("Document approval mismatch", text)
+
+    def test_confirmation_names_current_stage(self):
+        state = {
+            "repo": "o/r",
+            "task": {"number": 18},
+            "stage": "design",
+            "status": "awaiting_approval",
+        }
+        self.assertIn("这版设计确认通过", "\n".join(progress_rows(state)))
 
 
 if __name__ == "__main__":

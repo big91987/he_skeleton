@@ -123,3 +123,8 @@ print(
     ),
     flush=True,
 )
+
+if state["stage"] != "delivery" or state["status"] != "running":
+    raise SystemExit(
+        "Live full-workflow probe did not reach verified delivery; inspect FINAL above"
+    )

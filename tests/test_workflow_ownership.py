@@ -24,6 +24,7 @@ class WorkflowOwnership(unittest.TestCase):
                 source.mkdir()
                 product.mkdir()
                 (product / ".git").mkdir()
+                (product / "business.txt").write_text("keep business")
                 for name in [*MANAGED, *TEMPLATES.values()]:
                     p = source / name
                     p.parent.mkdir(parents=True, exist_ok=True)
@@ -100,6 +101,19 @@ class WorkflowOwnership(unittest.TestCase):
                 self.assertEqual((product / MANAGED[0]).read_text(), "upstream-v2")
                 self.assertTrue(set(changed).isdisjoint(TEMPLATES))
                 self.assertEqual(set(json.loads(m.read_text())["files"]), set(MANAGED))
+                revision = json.loads(m.read_text())["revision"]
+                expected = (
+                    subprocess.check_output(
+                        ["git", "rev-parse", "HEAD"], cwd=source, text=True
+                    ).strip()
+                    if transport == "local"
+                    else "fixture-sha"
+                )
+                self.assertEqual(revision, expected)
+                self.assertEqual(install(), [])
+                self.assertEqual(
+                    (product / "business.txt").read_text(), "keep business"
+                )
                 (product / form).unlink()
                 install()
                 self.assertFalse(
@@ -123,3 +137,21 @@ class WorkflowOwnership(unittest.TestCase):
                             if p.is_file()
                         },
                     )
+
+                managed = product / MANAGED[0]
+                managed.write_text("owner edited managed runtime")
+                before = {
+                    str(p.relative_to(product)): p.read_bytes()
+                    for p in product.rglob("*")
+                    if p.is_file()
+                }
+                with self.assertRaisesRegex(ValueError, "Local changes"):
+                    install()
+                self.assertEqual(
+                    before,
+                    {
+                        str(p.relative_to(product)): p.read_bytes()
+                        for p in product.rglob("*")
+                        if p.is_file()
+                    },
+                )

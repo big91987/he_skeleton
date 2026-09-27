@@ -73,11 +73,11 @@ class RoutingTests(unittest.TestCase):
         self.apply(self.decision(["run"] * 3))
         self.assertEqual(self.state["stage"], "requirements")
 
-    def test_existing_prd_starts_design(self):
+    def test_reused_prd_still_enters_requirements_for_confirmation(self):
         self.apply(self.decision(["reuse", "run", "run"]))
         self.assertEqual(self.state["stage"], "requirements")
 
-    def test_existing_code_enters_verification_not_delivery(self):
+    def test_reused_code_does_not_skip_requirements_confirmation(self):
         self.apply(self.decision(["reuse", "not_applicable", "reuse"]))
         self.assertEqual(self.state["stage"], "requirements")
         self.assertNotIn("review", self.state["completed"])
