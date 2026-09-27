@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 
 
-def plan(destination, managed, templates, revision):
+def plan(destination, managed, templates, revision, profile="full"):
     destination = destination.resolve()
     manifest = destination / ".harness/full-upstream.json"
     previous = json.loads(manifest.read_text()) if manifest.exists() else None
@@ -37,7 +37,9 @@ def plan(destination, managed, templates, revision):
             p = target(name)
             if p.exists():
                 link = (
-                    "docs/harness-full.md" if name == "AGENTS.md" else "harness-full.md"
+                    f"docs/harness-{profile}.md"
+                    if name == "AGENTS.md"
+                    else f"harness-{profile}.md"
                 )
                 text = p.read_text()
                 if "<!-- harness-full-index -->" not in text:
@@ -71,7 +73,9 @@ def plan(destination, managed, templates, revision):
     }
 
 
-def install(source, destination, ref):
+def install(source, destination, ref, profile="full"):
+    if profile not in {"full", "light"}:
+        raise ValueError("Unknown template")
     if source.resolve() == destination.resolve():
         raise ValueError("Install into a product checkout, not the toolbox")
     if not (destination / ".git").exists():
@@ -88,7 +92,7 @@ def install(source, destination, ref):
             rev,
             "--",
             "full_harness",
-            "templates/full",
+            "templates/" + profile,
         ],
         cwd=source,
         text=True,
@@ -100,10 +104,14 @@ def install(source, destination, ref):
         if name.startswith("full_harness/"):
             managed[name] = data
         else:
-            templates[name[len("templates/full/") :]] = data
+            templates[name[len("templates/" + profile + "/") :]] = data
     if not managed or not templates:
         raise ValueError("Selected revision has no full workflow profile")
-    changes = plan(destination, managed, templates, rev)
+    changes = plan(destination, managed, templates, rev, profile)
+    if profile == "light":
+        for name, data in templates.items():
+            if not (destination / name).exists():
+                changes[name] = data
     for name, data in changes.items():
         p = destination / name
         if data is None:

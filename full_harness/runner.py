@@ -831,9 +831,22 @@ def deliver(session, state):
     if changed_approval(session, state):
         raise ValueError("Approved documents changed before delivery")
     workspace = session / "workspace"
-    repo = state["repo"]
     if state["completed"].get("review", {}).get("snapshot") != digest(workspace):
         raise ValueError("Independent review no longer matches delivery contents")
+    if controls(workspace) != state["controls"]:
+        raise ValueError("Execution controls changed")
+    publish_changes(
+        session,
+        state,
+        "codex/full-task-" + str(state["task"]["number"]),
+        "独立完整流程交付。各阶段记录与验证范围见 Issue。请审查后合入。",
+    )
+
+
+def publish_changes(session, state, branch, description):
+    """Publish a verified workspace; both templates share the GitHub transport."""
+    workspace = session / "workspace"
+    repo = state["repo"]
     if controls(workspace) != state["controls"]:
         raise ValueError("Execution controls changed")
     base = api(repo, "commits/" + state["branch"])
@@ -880,7 +893,6 @@ def deliver(session, state):
             "已有材料验证完成，无新增代码改动；请查看评审与验证结果。",
         )
         return
-    branch = "codex/full-task-" + str(state["task"]["number"])
     snapshot = digest(workspace)
     if state.get("delivery_snapshot") != snapshot:
         refs = api(repo, "git/matching-refs/heads/" + branch)
@@ -940,7 +952,8 @@ def deliver(session, state):
                 "draft": True,
                 "body": "Closes #"
                 + str(state["task"]["number"])
-                + "\n\n独立完整流程交付。各阶段记录与验证范围见 Issue 交付卡片。请审查后合入。",
+                + "\n\n"
+                + description,
             },
         )
     )

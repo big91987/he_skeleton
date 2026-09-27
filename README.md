@@ -103,3 +103,11 @@ node --check harness/browser.cjs
 依赖：Python 3、Node、已登录的 Codex CLI（本机验证版本 0.151.0）、Runner 2.337.0；`tools/` 安装 Playwright 1.58.2 和对应 Chromium。Pages 设置为 GitHub Actions 发布。不启用 Actions 审批 PR 的额外权限。
 
 Runner 连通验证：[实际通过的运行](https://github.com/big91987/he_skeleton/actions/runs/35201703061)。完整链路以实验 Issue 中的实际运行、预览和反馈记录为准。
+
+## Light conversation template
+
+For one Codex execution per Issue message, install with
+`python3 scripts/install_light.py <product-checkout> --ref <commit>` (ref defaults to HEAD).
+The independent template is in `templates/light/`; the existing full template remains available.
+See [behavior, setup and limitations](templates/light/docs/harness-light.md).
+Enable only one automatic Issue workflow, or separate their triggers explicitly.

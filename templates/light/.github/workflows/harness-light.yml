@@ -1,0 +1,86 @@
+name: Light conversation
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: Existing Issue number
+        type: string
+        required: true
+      instruction:
+        description: Optional natural-language message
+        type: string
+        default: ''
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+concurrency:
+  group: light-development-${{ github.repository }}
+  cancel-in-progress: false
+env:
+  FULL_STATE_ROOT: ${{ vars.FULL_STATE_ROOT }}
+  NODE_PATH: ${{ vars.FULL_NODE_PATH }}
+jobs:
+  authorize:
+    if: >-
+      github.event.sender.type != 'Bot' && !github.event.issue.pull_request &&
+      !startsWith(github.event.comment.body, '<!-- harness-event:') &&
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'issues' || github.event_name == 'issue_comment')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      allowed: ${{ steps.permission.outputs.allowed }}
+    steps:
+      - name: Verify repository permissions before local execution
+        id: permission
+        uses: actions/github-script@v7
+        with:
+          script: |
+            async function allowed(username) {
+              if (!username || username.endsWith('[bot]')) return false;
+              if (username.toLowerCase() === context.repo.owner.toLowerCase()) return true;
+              try {
+                const {data} = await github.rest.repos.getCollaboratorPermissionLevel({...context.repo, username});
+                return ['admin', 'maintain', 'write'].includes(data.permission);
+              } catch (error) {
+                if (error.status === 403 || error.status === 404) return false;
+                throw error;
+              }
+            }
+            const actors = [...new Set([context.actor, process.env.GITHUB_TRIGGERING_ACTOR || context.actor])];
+            const permitted = (await Promise.all(actors.map(allowed))).every(Boolean);
+            core.setOutput('allowed', String(permitted));
+            await core.summary.addRaw(permitted ? 'Authorized contributor: continue on the project Runner.' : 'Waiting for a contributor with write, maintain or admin permission to comment or start the task.').write();
+  conversation:
+    needs: [authorize]
+    if: needs.authorize.outputs.allowed == 'true'
+    runs-on: [self-hosted, macOS, ARM64, he-full]
+    timeout-minutes: 40
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Resume conversation · one Codex execution
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LIGHT_PUBLIC: ${{ runner.temp }}/light-public-${{ github.run_id }}
+        run: |
+          export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+          test -n "$FULL_STATE_ROOT" || { echo 'Configure FULL_STATE_ROOT first'; exit 1; }
+          python3 full_harness/light.py
+      - name: Download documents
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: light-${{ github.run_id }}
+          path: ${{ runner.temp }}/light-public-${{ github.run_id }}
+          if-no-files-found: ignore
+          retention-days: 30
