@@ -1,3 +1,4 @@
+import html
 import tempfile
 import unittest
 from pathlib import Path
@@ -126,3 +127,16 @@ class TimelineTests(unittest.TestCase):
             self.assertIn("<details>", patches[0])
             self.assertNotIn("/private/task", patches[0])
             self.assertEqual(resumed.record["comment_id"], 77)
+
+            self.assertIn('"type": "item.completed"', html.unescape(patches[-1]))
+            self.assertIn("执行中", patches[-1])
+            complete = {"type": "turn.completed", "usage": {"output_tokens": 3}}
+            resumed(complete)
+            self.assertEqual(resumed.record["execution_event"], complete)
+            self.assertIn("本轮输出已结束", patches[-1])
+            resumed.finish(True)
+            self.assertIn("本轮已结束", patches[-1])
+            resumed.finish(False)
+            self.assertIn("执行失败", patches[-1])
+            self.assertEqual(resumed.record["execution_event"], complete)
+            self.assertEqual(len(posts), 1)

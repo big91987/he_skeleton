@@ -334,6 +334,24 @@ class LightTests(unittest.TestCase):
         write_json(turn / "context.json", {"state": {"stage": "requirements"}})
         raw = result(next_state="design", message="设计完成", artifacts=[])
         write_json(turn / "agent/result.json", raw)
+        events = [
+            {"type": "turn.started"},
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "item_3",
+                    "type": "agent_message",
+                    "text": json.dumps(raw, ensure_ascii=False),
+                },
+            },
+            {
+                "type": "turn.completed",
+                "usage": {"input_tokens": 100, "output_tokens": 20},
+            },
+        ]
+        (turn / "agent/agent.jsonl").write_text(
+            "\n".join(json.dumps(e) for e in events) + "\n"
+        )
         with (
             patch.dict(os.environ, {"LIGHT_PUBLIC": str(self.session / "public")}),
             patch.object(light, "publish", return_value="url"),
@@ -342,12 +360,14 @@ class LightTests(unittest.TestCase):
             light.report(self.session, self.state)
         body = html.unescape((self.session / "public/reply.md").read_text())
         self.assertIn("requirements → design", body)
-        self.assertIn('"next_state": "design"', body)
-        self.assertIn('"artifacts": []', body)
-        self.assertNotIn('"message":', body)
+        self.assertIn('"type": "item.completed"', body)
+        self.assertIn('"type": "turn.completed"', body)
+        self.assertIn("本轮执行：已结束", body)
         self.assertEqual(
-            json.loads((self.session / "public/agent-fields.json").read_text()),
-            {"next_state": "design", "artifacts": []},
+            json.loads((self.session / "public/agent-events.json").read_text()), events
+        )
+        self.assertEqual(
+            json.loads((self.session / "public/agent-result.json").read_text()), raw
         )
 
     def test_rejected_result_shows_proposal_separately_from_saved_stage(self):
@@ -372,6 +392,7 @@ class LightTests(unittest.TestCase):
         self.assertEqual(self.state["reply"], "原回复")
 
     def test_failed_turn_does_not_show_previous_turn_output(self):
+        import json
         import os
 
         self.state.update(
@@ -388,6 +409,17 @@ class LightTests(unittest.TestCase):
         body = (self.session / "public/reply.md").read_text()
         self.assertIn("本轮未取得可解析的 Agent 结构化输出", body)
         self.assertNotIn("next_state", body)
+        failed = {"type": "turn.failed", "error": {"message": "connection closed"}}
+        log = self.session / "turns/2/agent/agent.jsonl"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(json.dumps(failed) + "\n")
+        with (
+            patch.dict(os.environ, {"LIGHT_PUBLIC": str(self.session / "public")}),
+            patch.object(light, "publish", return_value="url"),
+        ):
+            light.report(self.session, self.state, error="连接失败")
+        self.assertEqual(read_json(self.session / "public/agent-events.json"), [failed])
+        self.assertFalse((self.session / "public/agent-result.json").exists())
 
     def test_issue_conversation_reloads_checkpoint_resumes_and_publishes_once(self):
         """Fake only Codex/GitHub; exercise the actual entry, disk state and replies."""

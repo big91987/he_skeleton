@@ -230,22 +230,28 @@ def execute(source, session, state, message, event_id, sent=None):
     write_json(context_path, context)
     allowed = state["config"]["stages"][stage]["skills"]
     print("当前阶段：" + stage + " · 本阶段一次 Codex 执行", flush=True)
-    result, sid = invoke(
-        source,
-        session / "workspace",
-        session,
-        prompt(state, message),
-        evidence / "agent",
-        session_id=recover_session(session),
-        hook_context=context_path if stage == "development" else None,
-        hook_script="light_hook.py",
-        schema_override=SCHEMA,
-        skills=allowed,
-        timeout_override=state["config"]["agent_timeout"],
-        on_event=AgentReplies(
-            api, state, evidence / "issue-progress.json", (session, Path.home())
-        ),
+    replies = AgentReplies(
+        api, state, evidence / "issue-progress.json", (session, Path.home())
     )
+    try:
+        result, sid = invoke(
+            source,
+            session / "workspace",
+            session,
+            prompt(state, message),
+            evidence / "agent",
+            session_id=recover_session(session),
+            hook_context=context_path if stage == "development" else None,
+            hook_script="light_hook.py",
+            schema_override=SCHEMA,
+            skills=allowed,
+            timeout_override=state["config"]["agent_timeout"],
+            on_event=replies,
+        )
+    except BaseException:
+        replies.finish(False)
+        raise
+    replies.finish(True)
     apply_result(session, state, result, message, sent)
     state["session_id"] = sid
     state.setdefault("handled", []).append(event_id)
@@ -264,27 +270,66 @@ def report(session, state, error=None):
         if context_path.exists()
         else state["stage"]
     )
+    body += "\n\n本轮执行：" + ("执行失败" if error else "已结束")
     body += f"\n\n本轮阶段（开始 → 已保存）：`{before} → {state['stage']}`"
     # Read the actual current-turn output, including a proposal rejected by checks.
     # Never reconstruct it from the checkpoint or fall back to an earlier turn.
+    rendered = None
     try:
         raw = read_json(evidence / "agent/result.json")
         if not isinstance(raw, dict):
             raise ValueError("Agent result is not an object")
-        fields = {key: value for key, value in raw.items() if key != "message"}
-        rendered = json.dumps(fields, ensure_ascii=False, indent=2)
+        rendered = json.dumps(raw, ensure_ascii=False, indent=2)
         rendered = rendered.replace(str(session), "<private-runtime>").replace(
             str(Path.home()), "<private-runtime>"
         )
-        (public / "agent-fields.json").write_text(rendered + "\n")
-        body += (
-            "\n\n<details><summary>Agent 原始输出（除 message）</summary>\n\n<pre>"
-            + html.escape(rendered)
-            + "</pre>\n\nnext_state 是 Agent 返回值；上方阶段是框架实际保存值。\n\n</details>"
-        )
+        (public / "agent-result.json").write_text(rendered + "\n")
     except (OSError, ValueError):
-        (public / "agent-fields.json").unlink(missing_ok=True)
+        (public / "agent-result.json").unlink(missing_ok=True)
         body += "\n\n本轮未取得可解析的 Agent 结构化输出。"
+    events = []
+    log = evidence / "agent/agent.jsonl"
+    if log.exists():
+        for line in log.read_text().splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            item = event.get("item") or {}
+            if event.get("type") in {
+                "thread.started",
+                "turn.started",
+                "turn.completed",
+                "turn.failed",
+                "error",
+            } or (
+                event.get("type") == "item.completed"
+                and isinstance(item, dict)
+                and item.get("type") == "agent_message"
+            ):
+                events.append(event)
+    if events:
+        rendered = json.dumps(events, ensure_ascii=False, indent=2)
+        rendered = rendered.replace(str(session), "<private-runtime>").replace(
+            str(Path.home()), "<private-runtime>"
+        )
+        (public / "agent-events.json").write_text(rendered + "\n")
+    else:
+        (public / "agent-events.json").unlink(missing_ok=True)
+    if rendered is not None:
+        label = (
+            "Codex 原始消息与状态事件（完整 JSON）"
+            if events
+            else "最终结果 JSON（本轮无原始事件日志）"
+        )
+        body += "\n\n<details><summary>" + label + "</summary>\n\n"
+        if len(html.escape(rendered)) < 24000:
+            body += "<pre>" + html.escape(rendered) + "</pre>"
+        else:
+            body += "完整 JSON 较长，请从本轮产物下载 agent-events.json 和 agent-result.json（如有）。"
+        body += "\n\nitem.completed 只表示一个消息或工具项结束；turn.completed 表示 Codex 本轮输出结束，任务是否完成以保存阶段为准。\n\n</details>"
     for name in [] if error else state.get("artifacts", []):
         path = relative_file(session / "workspace", name)
         if not path.is_file():
