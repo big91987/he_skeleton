@@ -79,8 +79,12 @@ class Console:
                 result = json.loads(message)
             except (ValueError, TypeError):
                 result = None
-            if isinstance(result, dict) and "summary" in result:
-                self.text("Agent：\n" + str(result["summary"]))
+            if isinstance(result, dict) and (
+                "summary" in result or "message" in result
+            ):
+                self.text(
+                    "Agent：\n" + str(result.get("message", result.get("summary")))
+                )
                 if result.get("status"):
                     self.text("状态：" + str(result["status"]))
                 if result.get("question"):
@@ -88,7 +92,7 @@ class Console:
                 details = {
                     k: v
                     for k, v in result.items()
-                    if k not in {"summary", "status", "question"} and v
+                    if k not in {"summary", "message", "status", "question"} and v
                 }
                 if details:
                     self.group(

@@ -14,7 +14,7 @@ from pathlib import Path
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from full_harness.codex import RESULT_SCHEMA, invoke
+from full_harness.codex import invoke
 from full_harness.common import controls, digest, read_json, relative_file, write_json
 from full_harness.runner import (
     api,
@@ -26,22 +26,35 @@ from full_harness.runner import (
 from full_harness.timeline import publish
 
 STAGES = ["requirements", "design", "development"]
-SCHEMA = copy.deepcopy(RESULT_SCHEMA)
-SCHEMA["properties"].update(
-    {
-        "stage": {"type": "string", "enum": STAGES},
-        "awaiting_approval": {
-            "type": "boolean",
-            "description": "True only when THIS reply submits documents for human review. False for ordinary answers; pending review is retained automatically.",
+STATES = [*STAGES, "done"]
+SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "next_state": {"type": "string", "enum": STATES},
+        "message": {"type": "string"},
+        "artifacts": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Existing project-relative files to show in THIS reply; [] for ordinary conversation.",
         },
-        "delivered": {"type": "boolean"},
-        "approval_quote": {
-            "type": "string",
-            "description": "Exact quote from this user message confirming the pending documents; empty otherwise.",
-        },
-    }
-)
-SCHEMA["required"] = list(SCHEMA["properties"])
+    },
+    "required": ["next_state", "message", "artifacts"],
+}
+
+
+def migrate(state):
+    """Retain old task facts and Session while removing the old status flags."""
+    pending = state.pop("pending", None)
+    if pending:
+        state.setdefault("documents", {})[pending["stage"]] = {
+            "files": pending["files"],
+            "shown_at": pending["requested_at"],
+        }
+    if state.pop("delivered", False) and state.get("pr_url"):
+        state["stage"] = "done"
+    for name in ("status", "reply_token", "reason"):
+        state.pop(name, None)
 
 
 def hashes(workspace, names):
@@ -55,21 +68,13 @@ def hashes(workspace, names):
 
 
 def validate_result(session, state, result, message, sent):
-    """Check transport and approval evidence, never classify the user's words."""
-    if set(result) != set(SCHEMA["required"]):
-        raise ValueError("结果字段不完整")
-    if result["stage"] not in STAGES or result["status"] not in {
-        "ready",
-        "needs_input",
-        "blocked",
-    }:
-        raise ValueError("无效阶段或状态")
-    for key in ("summary", "question", "approval_quote"):
-        if not isinstance(result[key], str):
-            raise ValueError("回复必须是文字")
-    for key in ("awaiting_approval", "delivered"):
-        if type(result[key]) is not bool:
-            raise ValueError("无效结果标志")
+    """Validate a proposed checkpoint, not the meaning of a conversation."""
+    if not isinstance(result, dict) or set(result) != set(SCHEMA["required"]):
+        raise ValueError("结果必须包含 next_state、message、artifacts 三个字段")
+    if result["next_state"] not in STATES:
+        raise ValueError("无效的接续位置")
+    if not isinstance(result["message"], str) or not result["message"].strip():
+        raise ValueError("回复不能为空")
     if not isinstance(result["artifacts"], list) or not all(
         isinstance(n, str) for n in result["artifacts"]
     ):
@@ -78,81 +83,78 @@ def validate_result(session, state, result, message, sent):
     if controls(workspace) != state["controls"]:
         raise ValueError("执行规则被修改，请恢复后继续")
     material = hashes(workspace, result["artifacts"])
-    previous = STAGES.index(state["stage"])
-    current = STAGES.index(result["stage"])
-    if current > previous:
-        pending = state.get("pending")
-        quote = result["approval_quote"].strip()
-        if current != previous + 1 or not pending or pending["stage"] != state["stage"]:
-            raise ValueError("进入下一阶段需要先展示本阶段产物并获得确认")
-        if not quote or quote not in message:
-            raise ValueError("未找到本条消息对待审文档的确认原话")
-        if hashes(workspace, pending["files"]) != pending["files"]:
-            raise ValueError("待审文件发生变化，需要重新展示并确认")
+    previous = STATES.index(state["stage"])
+    current = STATES.index(result["next_state"])
+    if previous == 0 and current > 1:
+        raise ValueError("需求确认不能代替设计确认")
+    if current > previous and state["stage"] in STAGES[:2]:
+        document = state.get("documents", {}).get(state["stage"])
+        if not document or not message.strip():
+            raise ValueError("先展示本阶段文档，再由用户回复确认")
+        if hashes(workspace, document["files"]) != document["files"]:
+            raise ValueError("已展示的文件发生变化，需要重新展示后确认")
         if sent and datetime.fromisoformat(
             sent.replace("Z", "+00:00")
-        ) < datetime.fromisoformat(pending["requested_at"]):
-            raise ValueError("这条消息早于待审文档，请查看当前版本后确认")
-    if result["awaiting_approval"] and (
-        not material or result["stage"] == "development" or result["status"] != "ready"
-    ):
-        raise ValueError("需求或设计产物就绪后才能请求确认")
-    if result["delivered"] and (
-        result["stage"] != "development"
-        or result["status"] != "ready"
-        or result["awaiting_approval"]
-    ):
-        raise ValueError("只有完成研发验证后才能交付")
+        ) < datetime.fromisoformat(document["shown_at"]):
+            raise ValueError("这条消息早于当前文档，请查看后确认")
     return material
 
 
 def apply_result(session, state, result, message, sent):
-    material = validate_result(session, state, result, message, sent)
-    workspace = session / "workspace"
-    if result["delivered"]:
-        gate_path = session / "turns" / str(state["turn"]) / "gate.json"
-        gate = read_json(gate_path) if gate_path.exists() else {}
-        if gate.get("status") != "passed" or gate.get("snapshot") != digest(workspace):
-            raise ValueError("研发校验尚未通过，不能交付")
-    previous = STAGES.index(state["stage"])
-    current = STAGES.index(result["stage"])
-    if current > previous:
-        state.setdefault("approvals", {})[state["stage"]] = {
-            **state["pending"],
-            "quote": result["approval_quote"],
-            "turn": state["turn"],
+    # Do not partially change the checkpoint when validation fails.
+    updated = copy.deepcopy(state)
+    migrate(updated)
+    material = validate_result(session, updated, result, message, sent)
+    previous = STATES.index(updated["stage"])
+    current = STATES.index(result["next_state"])
+    if result["next_state"] == "done":
+        gate_path = session / "turns" / str(updated["turn"]) / "gate.json"
+        gate = (
+            read_json(gate_path)
+            if gate_path.exists()
+            else updated.get("verification", {})
+        )
+        if gate.get("status") != "passed" or gate.get("snapshot") != digest(
+            session / "workspace"
+        ):
+            raise ValueError("研发校验尚未通过，不能记为完成交付")
+        updated["verification"] = {
+            **gate,
+            "turn": updated["turn"] if gate_path.exists() else gate["turn"],
         }
-        state.pop("pending", None)
+    if current > previous and updated["stage"] in STAGES[:2]:
+        updated.setdefault("approvals", {})[updated["stage"]] = {
+            **updated["documents"][updated["stage"]],
+            "message": message,
+            "event_id": updated.get("active_event"),
+            "turn": updated["turn"],
+        }
     elif current < previous:
-        state.pop("pending", None)
         for stage in STAGES[current:]:
-            state.get("approvals", {}).pop(stage, None)
-    # Ordinary questions preserve an unchanged pending version. A document edit
-    # invalidates it; the Agent can request confirmation of its new revision.
-    pending = state.get("pending")
-    if pending:
-        try:
-            unchanged = hashes(workspace, pending["files"]) == pending["files"]
-        except ValueError:
-            unchanged = False
-        if not unchanged:
-            state.pop("pending", None)
-    if result["awaiting_approval"] and (
-        not state.get("pending") or state["pending"]["files"] != material
-    ):
-        state["pending"] = {
-            "stage": result["stage"],
-            "files": material,
-            "requested_at": datetime.now(timezone.utc).isoformat(),
-        }
-    state.update(
-        stage=result["stage"],
-        status=result["status"],
-        reply=result["summary"]
-        + ("\n\n" + result["question"] if result["question"] else ""),
-        artifacts=result["artifacts"],
-        delivered=result["delivered"],
+            updated.get("approvals", {}).pop(stage, None)
+    next_state = result["next_state"]
+    if material and next_state in STAGES[:2]:
+        old = updated.get("documents", {}).get(next_state, {})
+        if old.get("files") != material:
+            updated.setdefault("documents", {})[next_state] = {
+                "files": material,
+                "shown_at": datetime.now(timezone.utc).isoformat(),
+            }
+    if current != previous:
+        updated.setdefault("history", []).append(
+            {
+                "from": updated["stage"],
+                "to": next_state,
+                "event_id": updated.get("active_event"),
+                "message": message,
+            }
+        )
+    updated.update(
+        stage=next_state, reply=result["message"], artifacts=result["artifacts"]
     )
+    updated.pop("error", None)
+    state.clear()
+    state.update(updated)
 
 
 def prompt(state, message):
@@ -160,34 +162,37 @@ def prompt(state, message):
         "task": state["task"],
         "stage": state["stage"],
         "message": message,
-        "pending_confirmation": state.get("pending"),
-        "confirmed": state.get("approvals", {}),
+        "documents": {
+            s: list(d["files"]) for s, d in state.get("documents", {}).items()
+        },
+        "confirmed_documents": {
+            s: list(d["files"]) for s, d in state.get("approvals", {}).items()
+        },
         "project_entries": state["config"]["entries"],
         "stages": {s: state["config"]["stages"][s] for s in STAGES},
         "checks": state["config"].get("checks", []),
     }
     return (
-        "你直接与用户协作完成项目。本条消息只启动你这一次，不会另调意图分类或执行模型。"
-        "首次读取 AGENTS.md 和项目入口，后续沿用当前原生 Session。按需读取原生 Skill；目录同时提供三个阶段的 Skill，优先当前阶段。"
-        "理解用户是在提问、澄清、修改还是确认，然后直接回答或工作；不要只返回分类等另一个 Agent。"
-        "需求、设计完成时，展示真实文档并用自然语言请用户确认，awaiting_approval=true。"
-        "若本条消息明确确认 pending_confirmation 中的文档，在这同一次执行里进入下一阶段并使用该阶段 Skill，approval_quote 填确认原话。"
-        "每次最多推进一个阶段，不能把需求确认当作设计确认。没有确认或只是提问就留在当前阶段。"
-        "用户带来现有文档、原型或代码时，直接复用并简短列出待确认基线，不重新造文档；可以用一个简短文件索引现有材料。"
-        "设计按任务需要覆盖 UI/原型和架构/数据契约，不强迫所有产品做网页。"
-        "研发在本进程持续实现、格式化、lint、测试和修复；完成 Python 修改运行 python3 full_harness/quality.py fix，再 check。"
-        "研发完毕生成配置指定的验证记录，并返回 delivered=true，原生 Stop Hook 会运行真实项目检查，失败会让你在同一次执行内继续修复。"
-        "普通问答 delivered=false，不运行开发检查。缺用户决定时提问；环境卡住如实报告 blocked；不要为了等确认捏造澄清问题。"
-        "不得修改执行规则、伪造验证、绕过产品入口、修改已确认文档后沿用旧批准。需要修改基线时回到对应阶段重新确认。"
-        "即使 Skill 建议状态，也不要把 Pending User Approval、Ready for Architecture 等审批状态写入 PRD/设计正文或要求批准后修改文档状态。审批事实留在结构化结果。summary/question 是直接给用户看的原话，明确说做了什么及下一步需要什么。"
-        "普通问答使用 artifacts=[]、awaiting_approval=false；这不会撤销已有待审记录，不要因为仍在等确认就再次附上未变化文档。"
-        "仅提交新产物、修改后再次请审或用户明确要求看文档时，在 artifacts 列出实际文件相对路径；不要把内部 state、日志或凭证当产物。"
-        "最终结果遵循 schema。当前为轻量模板，旧完整模板的只读意图调用、控制器审批登记和额外独立模型评审流程不适用。\n"
+        "本轮采用三字段协议：next_state、message、artifacts。旧会话里的 status、awaiting_approval、delivered、approval_quote 等输出字段不再使用。"
+        "你直接与用户协作，每条消息只启动你这一次。首次读项目入口，后续恢复同一个原生 Session。三个阶段的 Skill 都可按需读取。"
+        "输入 stage 是本轮开始的位置；输出 next_state 是本轮结束后的接续位置。只有 requirements、design、development、done 四个值。"
+        "澄清、提问、等待确认、遇到阻塞都停留在本阶段，在 message 直接解释或提问，等用户下一条回复再继续；没有额外的等待状态。"
+        "需求和设计完成后，在 artifacts 提交真实文档，并在 message 请用户确认。你结合本条消息和上下文判断是否确认，不依赖固定词或命令。"
+        "用户明确确认已展示的需求或设计后，在同一次执行里进入下一阶段并工作；不能把需求确认当作设计确认。设计获确认后可在本轮完成全部研发并返回 done。"
+        "已有文档、原型或代码直接复用，缺必要决策才澄清。用户要修改前面已确认的内容，返回对应阶段修改并重新请审。"
+        "设计按实际项目覆盖必要 UI/原型、架构和数据契约，不强迫所有产品做网页。"
+        "研发在同一个进程尽量持续实现、格式化、lint、测试和整改；Python 修改运行 python3 full_harness/quality.py fix，再 check。"
+        "只有实际完成研发才返回 done，并生成配置指定的验证记录。原生 Stop Hook 会检查，失败让你在同一次执行中修复；环境阻塞返回 development 并说明。"
+        "普通问答保留原阶段，artifacts=[]，不重复提交旧文档。仅新文档、修订文档或用户要求查看文件时列出实际相对路径。"
+        "不得修改执行规则或伪造验证，不能改过已确认文档后沿用旧确认。"
+        "即使 Skill 建议状态，也不把 Pending User Approval、Ready for Architecture 等审批状态写进文档。message 是直接给用户看的原话。"
+        "不另调意图分类或独立评审模型，流程记录由框架维护。\n"
         + json.dumps(packet, ensure_ascii=False, indent=2)
     )
 
 
 def execute(source, session, state, message, event_id, sent=None):
+    migrate(state)
     if event_id in state.get("handled", []):
         return
     if state.get("active_event") == event_id:
@@ -238,11 +243,11 @@ def execute(source, session, state, message, event_id, sent=None):
     write_json(session / "state.json", state)
 
 
-def report(session, state):
+def report(session, state, error=None):
     public = Path(os.environ["LIGHT_PUBLIC"])
     public.mkdir(parents=True, exist_ok=True)
-    body = state["reply"]
-    for name in state.get("artifacts", []):
+    body = error or state["reply"]
+    for name in [] if error else state.get("artifacts", []):
         path = relative_file(session / "workspace", name)
         if not path.is_file():
             continue
@@ -268,12 +273,7 @@ def report(session, state):
         str(Path.home()), "<private-runtime>"
     )
     if len(body) > 60000:
-        body = (
-            state["reply"][:12000]
-            + "\n\n产物较长，请查看[运行日志及下载]("
-            + url
-            + ")。"
-        )
+        body = body[:12000] + "\n\n产物较长，请查看[运行日志及下载](" + url + ")。"
     (public / "reply.md").write_text(body)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
@@ -321,20 +321,26 @@ def main():
             if state_path.exists()
             else new_state(source, session, task, repo, sha, branch, runner)
         )
+        migrate(state)
         if state["runner"] != runner or state["baseline"] != sha:
             raise ValueError("任务基线或执行机器变化，需先协调已有工作区")
         if state["stage"] == "entry":
             state["stage"] = "requirements"
         state["task"] = task
-        state["run_id"] = os.environ["GITHUB_RUN_ID"]
+        run_id = os.environ["GITHUB_RUN_ID"]
         event_id = str(
             event.get("comment", {}).get("id")
             or (
                 "issue-" + str(number)
                 if os.environ["GITHUB_EVENT_NAME"] == "issues"
-                else "run-" + state["run_id"]
+                else "run-" + run_id
             )
         )
+        if event_id in state.get("handled", []):
+            if event_id != state["handled"][-1]:
+                return
+        else:
+            state["run_id"] = run_id
         if state.get("pr_number"):
             pr = api(repo, "pulls/" + str(state["pr_number"]))
             if pr.get("merged_at") or pr.get("state") == "closed":
@@ -348,22 +354,22 @@ def main():
                 event_id,
                 event.get("comment", {}).get("created_at"),
             )
-            if state.get("delivered"):
+            if state["stage"] == "done":
                 from full_harness.light_delivery import deliver
 
                 deliver(session, state)
         except Exception as error:
-            state.update(
-                status="blocked",
-                delivered=False,
-                artifacts=[],
-                reply="这次执行遇到问题："
+            state["error"] = str(error)
+            write_json(state_path, state)
+            report(
+                session,
+                state,
+                "这次执行遇到问题："
                 + str(error)
                 + "。现场和 Session 已保留，可查看日志后回复继续。",
             )
-            write_json(state_path, state)
-            report(session, state)
             raise
+        state.pop("error", None)
         report(session, state)
 
 

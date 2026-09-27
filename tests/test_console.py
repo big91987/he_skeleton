@@ -75,3 +75,24 @@ class ConsoleTests(unittest.TestCase):
             console.finish()
         self.assertIn("开始本轮执行", output.getvalue())
         self.assertIn("plain text", output.getvalue())
+
+    def test_light_reply_is_readable_without_dumping_json(self):
+        output = self.output(
+            [
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "agent_message",
+                        "text": json.dumps(
+                            {
+                                "next_state": "requirements",
+                                "message": "要支持离线吗？",
+                                "artifacts": [],
+                            }
+                        ),
+                    },
+                }
+            ]
+        )
+        self.assertIn("Agent：\n[codex] 要支持离线吗？", output)
+        self.assertNotIn('"message"', output)

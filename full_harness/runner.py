@@ -835,11 +835,23 @@ def deliver(session, state):
         raise ValueError("Independent review no longer matches delivery contents")
     if controls(workspace) != state["controls"]:
         raise ValueError("Execution controls changed")
-    publish_changes(
+    published = publish_changes(
         session,
         state,
         "codex/full-task-" + str(state["task"]["number"]),
         "独立完整流程交付。各阶段记录与验证范围见 Issue。请审查后合入。",
+    )
+    state["completed"]["delivery"] = {
+        "summary": state["pr_url"]
+        if published
+        else "Existing code verified; no new changes to commit"
+    }
+    pause(
+        state,
+        "waiting_review",
+        "已创建或更新待审 PR；请审查后合入。"
+        if published
+        else "已有材料验证完成，无新增代码改动；请查看验证结果。",
     )
 
 
@@ -884,15 +896,7 @@ def publish_changes(session, state, branch, description):
             )["sha"]
         tree.append(item)
     if not tree:
-        state["completed"]["delivery"] = {
-            "summary": "Existing code verified; no new changes to commit"
-        }
-        pause(
-            state,
-            "waiting_review",
-            "已有材料验证完成，无新增代码改动；请查看评审与验证结果。",
-        )
-        return
+        return False
     snapshot = digest(workspace)
     if state.get("delivery_snapshot") != snapshot:
         refs = api(repo, "git/matching-refs/heads/" + branch)
@@ -958,12 +962,7 @@ def publish_changes(session, state, branch, description):
         )
     )
     state.update(pr_url=pr["html_url"], pr_number=pr.get("number"))
-    pause(
-        state,
-        "waiting_review",
-        "已创建或更新待审 PR；可在 GitHub 审查合入，或回复具体修改意见继续当前任务。",
-    )
-    state["completed"]["delivery"] = {"summary": pr["html_url"]}
+    return True
 
 
 def report(session, state):

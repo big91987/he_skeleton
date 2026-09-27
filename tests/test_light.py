@@ -8,19 +8,7 @@ from full_harness.common import controls, read_json, write_json
 
 
 def result(**changes):
-    return (
-        dict(
-            status="ready",
-            summary="回复",
-            question="",
-            artifacts=[],
-            stage="requirements",
-            awaiting_approval=False,
-            delivered=False,
-            approval_quote="",
-        )
-        | changes
-    )
+    return dict(next_state="requirements", message="回复", artifacts=[]) | changes
 
 
 class LightTests(unittest.TestCase):
@@ -52,7 +40,7 @@ class LightTests(unittest.TestCase):
             calls.append(kwargs)
             args[4].mkdir(parents=True)
             write_json(self.session / "codex-session.json", {"session_id": "same"})
-            return result(summary="问题的回答"), "same"
+            return result(message="问题的回答"), "same"
 
         with patch.object(light, "invoke", side_effect=invoke):
             light.execute(Path.cwd(), self.session, self.state, "解释一下", "1")
@@ -69,21 +57,21 @@ class LightTests(unittest.TestCase):
         light.apply_result(
             self.session,
             self.state,
-            result(artifacts=["prd.md"], awaiting_approval=True),
+            result(artifacts=["prd.md"]),
             "",
             None,
         )
-        pending = self.state["pending"]
+        pending = self.state["documents"]["requirements"]
         light.apply_result(
-            self.session, self.state, result(summary="解释范围"), "为什么", None
+            self.session, self.state, result(message="解释范围"), "为什么", None
         )
-        self.assertEqual(self.state["pending"], pending)
+        self.assertEqual(self.state["documents"]["requirements"], pending)
 
     def test_approval_and_next_stage_work_in_same_result(self):
         light.apply_result(
             self.session,
             self.state,
-            result(artifacts=["prd.md"], awaiting_approval=True),
+            result(artifacts=["prd.md"]),
             "",
             None,
         )
@@ -92,36 +80,34 @@ class LightTests(unittest.TestCase):
             self.session,
             self.state,
             result(
-                stage="design",
-                approval_quote="没问题",
+                next_state="design",
                 artifacts=["design.md"],
-                awaiting_approval=True,
             ),
             "没问题，继续",
             None,
         )
         self.assertEqual(self.state["stage"], "design")
-        self.assertEqual(self.state["pending"]["stage"], "design")
+        self.assertIn("design", self.state["documents"])
         self.assertIn("requirements", self.state["approvals"])
 
-    def test_cannot_advance_without_user_quote_or_after_artifact_change(self):
+    def test_cannot_advance_without_message_or_after_artifact_change(self):
         light.apply_result(
             self.session,
             self.state,
-            result(artifacts=["prd.md"], awaiting_approval=True),
+            result(artifacts=["prd.md"]),
             "",
             None,
         )
         with self.assertRaises(ValueError):
             light.apply_result(
-                self.session, self.state, result(stage="design"), "为什么", None
+                self.session, self.state, result(next_state="design"), "", None
             )
         (self.root / "prd.md").write_text("范围 B")
         with self.assertRaises(ValueError):
             light.apply_result(
                 self.session,
                 self.state,
-                result(stage="design", approval_quote="同意"),
+                result(next_state="design"),
                 "同意",
                 None,
             )
@@ -134,7 +120,7 @@ class LightTests(unittest.TestCase):
             light.apply_result(
                 self.session,
                 self.state,
-                result(stage="development", delivered=True),
+                result(next_state="done"),
                 "继续",
                 None,
             )
@@ -221,7 +207,7 @@ class LightTests(unittest.TestCase):
         )
         payload = {
             "last_assistant_message": json.dumps(
-                result(stage="development", delivered=True, artifacts=["validation.md"])
+                result(next_state="done", artifacts=["validation.md"])
             )
         }
         with patch(
@@ -242,13 +228,15 @@ class LightTests(unittest.TestCase):
             "继续",
             None,
         )
-        self.assertTrue(self.state["delivered"])
+        self.assertEqual(self.state["stage"], "done")
+        self.assertNotIn("delivered", self.state)
+        self.assertNotIn("status", self.state)
 
     def test_stale_comment_cannot_approve_newer_document(self):
         light.apply_result(
             self.session,
             self.state,
-            result(artifacts=["prd.md"], awaiting_approval=True),
+            result(artifacts=["prd.md"]),
             "",
             None,
         )
@@ -256,7 +244,7 @@ class LightTests(unittest.TestCase):
             light.apply_result(
                 self.session,
                 self.state,
-                result(stage="design", approval_quote="同意"),
+                result(next_state="design"),
                 "同意",
                 "2020-01-01T00:00:00Z",
             )
@@ -272,8 +260,151 @@ class LightTests(unittest.TestCase):
             )
 
     def test_repeated_pending_version_keeps_original_confirmation_time(self):
-        first = result(artifacts=["prd.md"], awaiting_approval=True)
+        first = result(artifacts=["prd.md"])
         light.apply_result(self.session, self.state, first, "", None)
-        original = self.state["pending"]["requested_at"]
+        original = self.state["documents"]["requirements"]["shown_at"]
         light.apply_result(self.session, self.state, first, "解释一下", None)
-        self.assertEqual(self.state["pending"]["requested_at"], original)
+        self.assertEqual(self.state["documents"]["requirements"]["shown_at"], original)
+
+    def test_invalid_result_does_not_change_state(self):
+        import copy
+
+        before = copy.deepcopy(self.state)
+        for invalid in (
+            {},
+            result(next_state="unknown"),
+            result(message=None),
+            result(status="ready"),
+        ):
+            with self.assertRaises(ValueError):
+                light.apply_result(self.session, self.state, invalid, "继续", None)
+            self.assertEqual(self.state, before)
+
+    def test_clarification_and_blocked_messages_need_no_extra_states(self):
+        for message in (
+            "搜索是否需要区分大小写？",
+            "当前无法连接测试环境，请提供地址。",
+        ):
+            light.apply_result(
+                self.session, self.state, result(message=message), "继续", None
+            )
+            self.assertEqual(self.state["stage"], "requirements")
+            self.assertEqual(self.state["reply"], message)
+            self.assertNotIn("status", self.state)
+            self.assertNotIn("pending", self.state)
+
+    def test_legacy_state_keeps_documents_and_session_without_legacy_flags(self):
+        self.state.update(
+            pending={
+                "stage": "requirements",
+                "files": {"prd.md": "abc"},
+                "requested_at": "2026-01-01T00:00:00+00:00",
+            },
+            delivered=False,
+            session_id="same",
+            status="ready",
+        )
+        light.migrate(self.state)
+        self.assertEqual(self.state["stage"], "requirements")
+        self.assertEqual(self.state["session_id"], "same")
+        self.assertEqual(
+            self.state["documents"]["requirements"]["files"], {"prd.md": "abc"}
+        )
+        self.assertFalse(
+            set(self.state) & {"status", "pending", "delivered", "reply_token"}
+        )
+
+    def test_design_approval_can_finish_development_in_same_call(self):
+        from full_harness.common import digest
+
+        self.state.update(stage="design", turn=1)
+        (self.root / "design.md").write_text("设计")
+        light.apply_result(
+            self.session,
+            self.state,
+            result(next_state="design", artifacts=["design.md"]),
+            "展示设计",
+            None,
+        )
+        write_json(
+            self.session / "turns/1/gate.json",
+            {"status": "passed", "snapshot": digest(self.root)},
+        )
+        light.apply_result(
+            self.session,
+            self.state,
+            result(next_state="done"),
+            "设计没问题，完成开发",
+            None,
+        )
+        self.assertEqual(self.state["stage"], "done")
+        self.assertIn("design", self.state["approvals"])
+
+    def test_codex_wrapper_accepts_three_field_schema(self):
+        from full_harness.codex import invoke
+
+        sid = "00000000-0000-4000-8000-000000000001"
+        expected = result(message="是否需要搜索？")
+
+        def process(argv, workspace, env, log, timeout, prompt, stream):
+            write_json(Path(argv[argv.index("--output-last-message") + 1]), expected)
+            log.write_text(
+                __import__("json").dumps({"type": "thread.started", "thread_id": sid})
+                + "\n"
+            )
+            return 0
+
+        with (
+            patch(
+                "full_harness.codex.runtime_home", return_value=self.session / "home"
+            ),
+            patch("full_harness.codex.configure_skills"),
+            patch("full_harness.codex.run_process", side_effect=process),
+        ):
+            actual, actual_id = invoke(
+                Path.cwd(),
+                self.root,
+                self.session,
+                "需求",
+                self.session / "evidence",
+                schema_override=light.SCHEMA,
+            )
+        self.assertEqual(actual, expected)
+        self.assertEqual(actual_id, sid)
+
+    def test_transport_failure_preserves_successful_agent_reply_for_retry(self):
+        import os
+
+        from full_harness.common import read_json
+
+        self.state.update(
+            stage="design", reply="设计完成，请查看。", artifacts=[], run_id="10"
+        )
+        with (
+            patch.dict(os.environ, {"LIGHT_PUBLIC": str(self.session / "public")}),
+            patch.object(light, "publish", side_effect=RuntimeError("network")),
+        ):
+            with self.assertRaises(RuntimeError):
+                light.report(self.session, self.state)
+        self.assertEqual(self.state["reply"], "设计完成，请查看。")
+        with (
+            patch.dict(os.environ, {"LIGHT_PUBLIC": str(self.session / "public")}),
+            patch.object(light, "publish", return_value="url"),
+            patch.object(light, "invoke", side_effect=AssertionError("extra model")),
+        ):
+            light.report(self.session, self.state)
+        self.assertEqual(
+            read_json(self.session / "state.json")["reply"], "设计完成，请查看。"
+        )
+
+    def test_error_report_does_not_replace_validated_reply(self):
+        import os
+
+        self.state.update(reply="研发完成", stage="done", run_id="10", artifacts=[])
+        with (
+            patch.dict(os.environ, {"LIGHT_PUBLIC": str(self.session / "public")}),
+            patch.object(light, "publish", return_value="url"),
+        ):
+            light.report(self.session, self.state, error="PR 发送失败")
+        self.assertEqual(self.state["reply"], "研发完成")
+        self.assertIn("PR 发送失败", (self.session / "public/reply.md").read_text())

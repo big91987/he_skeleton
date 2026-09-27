@@ -166,14 +166,15 @@ def invoke(
     if code != 0 or not (evidence / "result.json").exists():
         raise RuntimeError("Codex execution failed; see private task log")
     result = read_json(evidence / "result.json")
-    if (
-        set(result) != set(schema["required"])
-        or result["status"] not in schema["properties"]["status"]["enum"]
-    ):
+    if not isinstance(result, dict) or set(result) != set(schema["required"]):
         raise ValueError("Invalid Agent result")
-    if any(not isinstance(result[k], str) for k in ["status", "summary", "question"]):
-        raise ValueError("Invalid result text")
-    if result["status"] == "needs_input" and not result["question"].strip():
+    for key, spec in schema["properties"].items():
+        value = result[key]
+        if spec.get("type") == "string" and not isinstance(value, str):
+            raise ValueError("Invalid result text: " + key)
+        if "enum" in spec and value not in spec["enum"]:
+            raise ValueError("Invalid result value: " + key)
+    if result.get("status") == "needs_input" and not result.get("question", "").strip():
         raise ValueError("Missing clarification question")
     if schema_override is not None:
         return result, ids[0]
