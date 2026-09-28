@@ -337,6 +337,16 @@ class FullWorkflowTests(unittest.TestCase):
         result = plan(self.work, {"full_harness/a.py": b"v2"}, templates, "revision2")
         self.assertNotIn("AGENTS.md", result)
         self.assertNotIn(".github/workflows/harness-full.yml", result)
+        contract = b"<!-- harness-workflow-git -->\nconditional Git policy\n<!-- /harness-workflow-git -->"
+        templates["AGENTS.md"] += b"\n" + contract
+        upgraded = plan(self.work, {"full_harness/a.py": b"v2"}, templates, "revision2")
+        self.assertIn(contract, upgraded["AGENTS.md"])
+        self.assertTrue(upgraded["AGENTS.md"].startswith(b"owner rules"))
+        (self.work / "AGENTS.md").write_bytes(upgraded["AGENTS.md"])
+        self.assertNotIn(
+            "AGENTS.md",
+            plan(self.work, {"full_harness/a.py": b"v2"}, templates, "revision2"),
+        )
         (self.work / "full_harness/a.py").write_text("local change")
         with self.assertRaises(ValueError):
             plan(self.work, {"full_harness/a.py": b"v3"}, templates, "revision3")

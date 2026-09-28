@@ -90,3 +90,7 @@ Stage Jobs use `!cancelled()` so an explicit workflow cancellation stops waiting
 ### Task branch delivery
 
 Delivery maintains `codex/light-task-<issue>` and opens a draft PR. Commits represent the verified workspace based on the task's original baseline; concurrent updates to the target branch do not block publication or get copied into the task commit. Delivery never merges or rebases the task. Integration checks and merging are a separate operation. External edits to the task branch itself are still protected against overwrite.
+
+### Workflow-owned branches
+
+The framework initializes the task workspace on `codex/light-task-<issue>` before starting any stage Agent. Each native Codex call, including resume, receives an explicit Harness CI/CD execution-context statement. The conditional Git rules in `AGENTS.md` apply only when that context is present; no environment-variable lookup is needed. Agents edit and verify files in the prepared workspace; the framework owns branch creation, commits and remote draft PR publication. Normal local sessions retain their existing Git rules. The installer adds this scoped contract to existing AGENTS.md files without replacing Owner instructions. Existing running tasks remain pinned to their original code and workspace.

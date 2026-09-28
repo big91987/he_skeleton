@@ -144,7 +144,7 @@ def event_input(event, repo, actor, event_name):
     return int(task), instruction
 
 
-def new_state(source, session, task, repo, sha, branch, runner):
+def new_state(source, session, task, repo, sha, branch, runner, *, task_branch=None):
     cfg = configuration(source)
     if (source / ".codex").exists():
         raise ValueError(
@@ -161,7 +161,7 @@ def new_state(source, session, task, repo, sha, branch, runner):
         dest.chmod((source / name).stat().st_mode & 0o777)
     git_env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "GH_"))}
     for argv in [
-        ["init", "-q"],
+        ["init", "-q", "-b", task_branch or "codex/full-task-" + str(task["number"])],
         ["add", "."],
         [
             "-c",

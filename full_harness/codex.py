@@ -89,6 +89,12 @@ def invoke(
     home = runtime_home(session_dir / ("review-home" if review else "codex-home"))
     schema = schema_override or (REVIEW_SCHEMA if review else RESULT_SCHEMA)
     write_json(evidence / "schema.json", schema)
+    prompt = (
+        "执行环境：这是 Harness CI/CD 托管工作区。框架负责准备任务分支及最终提交、推送和 PR；"
+        "本 Session 直接在当前工作区执行本阶段工作，不主动创建或切换分支，不提交或推送。"
+        "遵循 AGENTS.md 中的 Workflow 分支职责；无需通过环境变量或工具确认本运行模式。\n\n"
+        + prompt
+    )
     (evidence / "prompt.txt").write_text(prompt)
     # Project and user config must not add arbitrary hooks. The only hook below is
     # assembled by the controller from its fixed execution revision.
