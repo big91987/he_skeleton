@@ -62,7 +62,8 @@ def api(repo, path, method="GET", data=None):
         transient = (
             int(http[1]) in {408, 429, 500, 502, 503, 504}
             if http
-            else any(
+            else bool(re.search(r"\beof\s*$", detail, re.IGNORECASE))
+            or any(
                 word in detail.lower()
                 for word in (
                     "unexpected eof",
