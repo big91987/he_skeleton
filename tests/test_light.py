@@ -832,12 +832,19 @@ class LightTests(unittest.TestCase):
             if count == 1:
                 self.assertEqual(state["comment_cursor"], 100)
                 if path.endswith("issues/1"):
-                    return subprocess.CompletedProcess(argv, 1, "", "unexpected EOF")
+                    return subprocess.CompletedProcess(
+                        argv,
+                        1,
+                        "",
+                        'Get "https://api.github.com/repos/test/repo/issues/1": EOF\n',
+                    )
                 if "comments?" in path:
                     raise subprocess.TimeoutExpired(argv, 90)
                 return subprocess.CompletedProcess(
                     argv, 1, "", "HTTP 503: Service Unavailable"
                 )
+            if count == 2 and path.endswith("issues/1"):
+                return subprocess.CompletedProcess(argv, 1, "", "unexpected EOF")
             body = (
                 {"state": "open"}
                 if path.endswith("issues/1")
@@ -863,16 +870,19 @@ class LightTests(unittest.TestCase):
         self.assertEqual(state["comment_cursor"], 101)
         for method, failure in (
             ("GET", "HTTP 403: Forbidden"),
+            ("GET", "HTTP 403: EOF"),
             ("POST", "unexpected EOF"),
+            (
+                "POST",
+                'Post "https://api.github.com/repos/test/repo/issues/1/comments": EOF',
+            ),
         ):
             with (
                 self.subTest(method=method),
                 patch.object(
                     runner.subprocess,
                     "run",
-                    return_value=subprocess.CompletedProcess(
-                        [], 1, "", "HTTP 403: Forbidden"
-                    ),
+                    return_value=subprocess.CompletedProcess([], 1, "", failure),
                 ) as command,
             ):
                 with self.assertRaises(RuntimeError) as caught:
