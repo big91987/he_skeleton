@@ -86,3 +86,7 @@ Owner-configured check arguments may use `{source}` to reference the fixed execu
 Within the continuous workflow, a successful requirements → design or design → development transition saves the native result, documents and full reply in the stage download and Actions summary, but posts no outgoing-stage final comment. The incoming Agent speaks when it begins actual work. Agents should not narrate pure confirmation bookkeeping. Same-stage clarification/revision, failures, backward routing, and final delivery remain visible. No keyword approval parser or extra model call is introduced.
 
 Stage Jobs use `!cancelled()` so an explicit workflow cancellation stops waiting and releases the Runner. Artifact upload keeps its step-level `always()` cleanup. An old run pinned to the previous `always()` Job condition may require GitHub’s supported force-cancel endpoint after ordinary cancellation does not stop it; upgrading the template prevents recurrence.
+
+### Task branch delivery
+
+Delivery maintains `codex/light-task-<issue>` and opens a draft PR. Commits represent the verified workspace based on the task's original baseline; concurrent updates to the target branch do not block publication or get copied into the task commit. Delivery never merges or rebases the task. Integration checks and merging are a separate operation. External edits to the task branch itself are still protected against overwrite.
