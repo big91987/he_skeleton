@@ -80,6 +80,7 @@ class LightTests(unittest.TestCase):
             context,
             {
                 "state": self.state,
+                "source": str(Path.cwd()),
                 "workspace": str(self.root),
                 "session": str(self.session),
                 "evidence": str(self.session / "evidence"),
@@ -142,6 +143,7 @@ class LightTests(unittest.TestCase):
             context,
             {
                 "state": self.state,
+                "source": str(Path.cwd()),
                 "workspace": str(self.root),
                 "session": str(self.session),
                 "evidence": str(evidence),
@@ -280,13 +282,27 @@ class LightTests(unittest.TestCase):
 
     def test_codex_wrapper_accepts_three_field_schema(self):
         from full_harness.codex import invoke
+        from full_harness.common import clean_env
 
+        for policy in (
+            {"unset": ["PATH"]},
+            {"inherit": "NODE_PATH"},
+            {"set": {"APP_MODE": None}},
+            {"inherit": ["GH_TOKEN"]},
+            {"set": {"CODEX_HOME": "other"}},
+        ):
+            with self.subTest(policy=policy), self.assertRaises(ValueError):
+                clean_env(policy)
         sid = "00000000-0000-4000-8000-000000000001"
         expected = result(message="是否需要搜索？")
 
         forwarded = []
 
         def process(argv, workspace, env, log, timeout, prompt, stream, on_event):
+            self.assertEqual(env.get("NODE_PATH"), "/runner/browser/node_modules")
+            self.assertEqual(env["APP_MODE"], "test")
+            self.assertEqual(env["HTTP_PROXY"], "")
+            self.assertNotIn("GH_TOKEN", env)
             on_event({"type": "turn.started"})
             write_json(Path(argv[argv.index("--output-last-message") + 1]), expected)
             log.write_text(
@@ -296,6 +312,15 @@ class LightTests(unittest.TestCase):
             return 0
 
         with (
+            patch.dict(
+                "os.environ",
+                {
+                    "NODE_PATH": "/runner/browser/node_modules",
+                    "GH_TOKEN": "private",
+                    "APP_MODE": "old",
+                    "HTTP_PROXY": "http://unused",
+                },
+            ),
             patch(
                 "full_harness.codex.runtime_home", return_value=self.session / "home"
             ),
@@ -309,6 +334,10 @@ class LightTests(unittest.TestCase):
                 "需求",
                 self.session / "evidence",
                 schema_override=light.SCHEMA,
+                environment={
+                    "inherit": ["NODE_PATH", "APP_MODE"],
+                    "set": {"APP_MODE": "test", "HTTP_PROXY": ""},
+                },
                 on_event=forwarded.append,
                 session_record=self.session / "agents/requirements/codex-session.json",
             )

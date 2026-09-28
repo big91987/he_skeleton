@@ -236,6 +236,14 @@ def execute(source, session, state, message, event_id, sent=None):
         )
     stage = "development" if state["stage"] == "done" else state["stage"]
     sid, session_record = stage_session(session, stage)
+    browser_enabled = stage in {"design", "development"} and state["config"].get(
+        "browser_roots"
+    )
+    if browser_enabled:
+        from full_harness.browser import prepare
+
+        print("[harness] 检查受控浏览器运行环境。", flush=True)
+        prepare(source, state["config"].get("environment"))
     state["turn"] += 1
     state["active_event"] = event_id
     write_json(session / "state.json", state)
@@ -253,7 +261,6 @@ def execute(source, session, state, message, event_id, sent=None):
         "task": state["task"],
         "stage": stage,
         "stage_session": stage,
-        "node_path": os.environ.get("NODE_PATH", ""),
         "deadline_monotonic": time.monotonic() + state["config"]["agent_timeout"],
     }
     context_path = evidence / "context.json"
@@ -272,6 +279,8 @@ def execute(source, session, state, message, event_id, sent=None):
             evidence / "agent",
             session_id=sid,
             session_record=session_record,
+            browser_context=context_path if browser_enabled else None,
+            environment=state["config"].get("environment"),
             hook_context=context_path if stage == "development" else None,
             hook_script="light_hook.py",
             schema_override=SCHEMA,
@@ -357,7 +366,15 @@ def report(session, state, error=None, continuous=False):
         else:
             body += "[harness] 完整 JSON 较长，请从本轮产物下载 agent-events.json 和 agent-result.json（如有）。"
         body += "\n\n[harness] item.completed 只表示一个消息或工具项结束；turn.completed 表示 Codex 本轮输出结束，任务是否完成以保存阶段为准。\n\n</details>"
-    for name in [] if error else state.get("artifacts", []):
+    artifacts = list(state.get("artifacts", [])) if not error else []
+    if not error and (evidence / "browser.json").exists():
+        for run in read_json(evidence / "browser.json"):
+            artifacts.extend(run["artifacts"])
+    artifacts = list(dict.fromkeys(artifacts))
+    from full_harness.screenshots import publish_screenshots
+
+    body += publish_screenshots(api, session, state, artifacts, before)
+    for name in artifacts:
         path = relative_file(session / "workspace", name)
         if not path.is_file():
             continue

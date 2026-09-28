@@ -8,6 +8,8 @@ Never fabricate verification or change managed execution rules. Fix reusable too
 
 See [the light workflow](docs/harness-light.md). Owner configuration: `.harness/full.json`.
 
+When the owner configures `browser_roots`, design and development have the native `harness_browser.check` tool. Use it for real prototype/product browser checks instead of launching Chromium in the shell sandbox. Write a JSON action plan in the project and pass its path and an allowed application root to the tool. Inspect the returned results and screenshot files; include useful evidence in `artifacts`. A screenshot or a passing smoke plan does not replace the task's functional acceptance criteria. Fix failed checks and rerun the same tool; do not ask the user to supply screenshots because the shell sandbox cannot launch a browser.
+
 <!-- harness-stage-deliverables -->
 ## 阶段产物与 Skill 入口
 

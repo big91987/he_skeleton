@@ -89,3 +89,9 @@ python3 tests/integration_full.py --run-live
 本次原生 CLI 合成验证：五轮调用跨三个不同 Session，需求和设计各自完成一次用户确认后交接；各阶段实际读取其原生 Skill 与引用，研发生成离线加法 CLI，配置的真实命令检查及格式/lint 通过，保存为 done。使用临时合成文件和确认消息，未调用 GitHub 评论发布，也不等同于 reading_list 的整套产品 Skill 验收。
 
 等待 EOF 回归：用实际 gh 错误形态 `Get "https://api.github.com/...": EOF` 复现 Issue #49 的退出，接着注入 unexpected EOF、超时与 503，验证等待恢复后未读评论只消费一次。修正原测试的负例夹具，让 POST 实际收到其声明的 EOF，而非误用固定 403；403（包括错误文本含 EOF）和写请求仍不重试。此修复不解决宿主网络中断或 Runner 自身的日志/产物上传失败。
+
+
+浏览器与环境回归：新增三个集中场景保护浏览器根目录/控制文件边界、截图发布丢失响应后的幂等恢复与仓库可见性、MCP 的工具失败传播。扩展已有 Codex 包装器场景，检查 `inherit` 透传、`set` 覆盖与空字符串清空，控制令牌仍不下传。传输夹具不证明浏览器验收；原生浏览器探针需单独显式运行。
+
+
+真实浏览器探针：`python3 tests/integration_browser.py --run-live` 通过正式安装入口、原生 Codex MCP 工具和研发 Stop Hook，验证 Chromium 启动、桌面/手机截图、实际 Unicode JSON 下载、显式注入的下载失败反馈，以及校验子进程环境覆盖。该探针使用合成应用和模型额度，不调用 GitHub 评论服务，不代替产品验收。本次已真实通过。
