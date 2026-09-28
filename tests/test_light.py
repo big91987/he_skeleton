@@ -385,6 +385,9 @@ class LightTests(unittest.TestCase):
         ):
             light.report(self.session, self.state)
         body = html.unescape((self.session / "public/reply.md").read_text())
+        self.assertTrue(body.startswith("[codex] 设计完成\n\n[harness] "))
+        self.assertIn("[harness] 本轮阶段", body)
+        self.assertIn("[harness] [运行日志及产物下载]", body)
         self.assertIn("requirements → design", body)
         self.assertIn('"type": "item.completed"', body)
         self.assertIn('"type": "turn.completed"', body)
@@ -413,6 +416,7 @@ class LightTests(unittest.TestCase):
             light.report(self.session, self.state, error="校验未通过")
         body = html.unescape((self.session / "public/reply.md").read_text())
         self.assertIn("requirements → requirements", body)
+        self.assertTrue(body.startswith("[harness] 校验未通过"))
         self.assertIn('"next_state": "done"', body)
         self.assertEqual(self.state["stage"], "requirements")
         self.assertEqual(self.state["reply"], "原回复")
