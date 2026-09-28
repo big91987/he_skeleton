@@ -32,28 +32,33 @@ class LightTests(unittest.TestCase):
             },
         }
 
-    def test_cannot_advance_without_message_or_after_artifact_change(self):
+    def test_agent_handoff_accepts_updated_evidence_without_reapproval_gate(self):
+        light.apply_result(
+            self.session, self.state, result(artifacts=["prd.md"]), "", None
+        )
+        (self.root / "obsolete.md").write_text("已废弃草稿")
+        light.apply_result(
+            self.session, self.state, result(artifacts=["obsolete.md"]), "", None
+        )
+        (self.root / "obsolete.md").unlink()
+        (self.root / "prd.md").write_text("范围 A，补齐验证记录")
+        (self.root / "evidence.md").write_text("真实补证")
         light.apply_result(
             self.session,
             self.state,
-            result(artifacts=["prd.md"]),
-            "",
-            None,
+            result(
+                next_state="design",
+                message="需求已确认，交给设计",
+                artifacts=["evidence.md"],
+            ),
+            "ok 开始下一阶段",
+            "2020-01-01T00:00:00Z",
         )
-        with self.assertRaises(ValueError):
-            light.apply_result(
-                self.session, self.state, result(next_state="design"), "", None
-            )
-        (self.root / "prd.md").write_text("范围 B")
-        with self.assertRaises(ValueError):
-            light.apply_result(
-                self.session,
-                self.state,
-                result(next_state="design"),
-                "同意",
-                None,
-            )
-        self.assertEqual(self.state["stage"], "requirements")
+        self.assertEqual(self.state["stage"], "design")
+        handoff = self.state["history"][-1]
+        self.assertEqual(handoff["message"], "ok 开始下一阶段")
+        self.assertEqual(handoff["reply"], "需求已确认，交给设计")
+        self.assertEqual(set(handoff["files"]), {"prd.md", "evidence.md"})
 
     def test_delivery_requires_matching_real_gate(self):
         self.state["stage"] = "development"
@@ -112,6 +117,8 @@ class LightTests(unittest.TestCase):
         from full_harness.light_hook import evaluate
 
         self.state.update(stage="development", turn=1)
+        # Legacy approval hashes are trace data in light, not a hidden hook gate.
+        self.state["approvals"] = {"requirements": {"files": {"prd.md": "old-hash"}}}
         (self.root / "validation.md").write_text("实际验证记录")
         self.state["config"].update(
             max_attempts=3,
@@ -174,23 +181,6 @@ class LightTests(unittest.TestCase):
         self.assertNotIn("delivered", self.state)
         self.assertNotIn("status", self.state)
 
-    def test_stale_comment_cannot_approve_newer_document(self):
-        light.apply_result(
-            self.session,
-            self.state,
-            result(artifacts=["prd.md"]),
-            "",
-            None,
-        )
-        with self.assertRaises(ValueError):
-            light.apply_result(
-                self.session,
-                self.state,
-                result(next_state="design"),
-                "同意",
-                "2020-01-01T00:00:00Z",
-            )
-
     def test_invalid_artifact_cannot_escape_workspace(self):
         with self.assertRaises(ValueError):
             light.apply_result(
@@ -236,6 +226,34 @@ class LightTests(unittest.TestCase):
             set(self.state) & {"status", "pending", "delivered", "reply_token"}
         )
 
+    def test_stage_session_recovery_and_legacy_adoption_do_not_cross_stages(self):
+        import json
+        import uuid
+
+        requirement_id, design_id = str(uuid.uuid4()), str(uuid.uuid4())
+        write_json(self.session / "codex-session.json", {"session_id": requirement_id})
+        sid, requirement_record = light.stage_session(self.session, "requirements")
+        self.assertEqual(sid, requirement_id)
+        self.assertEqual(light.stage_session(self.session, "design")[0], None)
+        # Simulate a hard cancellation after native thread.started, before checkpoint save.
+        evidence = self.session / "turns/3"
+        write_json(evidence / "context.json", {"stage_session": "design"})
+        (evidence / "agent").mkdir()
+        (evidence / "agent/agent.jsonl").write_text(
+            json.dumps({"type": "thread.started", "thread_id": design_id}) + "\n"
+        )
+        sid, design_record = light.stage_session(self.session, "design")
+        self.assertEqual(sid, design_id)
+        self.assertEqual(read_json(design_record)["session_id"], design_id)
+        self.assertEqual(
+            light.stage_session(self.session, "requirements")[0], requirement_id
+        )
+        self.assertEqual(read_json(requirement_record)["session_id"], requirement_id)
+        self.assertEqual(light.stage_session(self.session, "development")[0], None)
+        write_json(design_record, {"session_id": requirement_id})
+        with self.assertRaisesRegex(ValueError, "Session"):
+            light.stage_session(self.session, "design")
+
     def test_design_approval_hands_off_to_development_job(self):
         self.state.update(stage="design", turn=1)
         (self.root / "design.md").write_text("设计")
@@ -258,7 +276,7 @@ class LightTests(unittest.TestCase):
             None,
         )
         self.assertEqual(self.state["stage"], "development")
-        self.assertIn("design", self.state["approvals"])
+        self.assertEqual(self.state["history"][-1]["from"], "design")
 
     def test_codex_wrapper_accepts_three_field_schema(self):
         from full_harness.codex import invoke
@@ -292,10 +310,18 @@ class LightTests(unittest.TestCase):
                 self.session / "evidence",
                 schema_override=light.SCHEMA,
                 on_event=forwarded.append,
+                session_record=self.session / "agents/requirements/codex-session.json",
             )
         self.assertEqual(forwarded, [{"type": "turn.started"}])
         self.assertEqual(actual, expected)
         self.assertEqual(actual_id, sid)
+        self.assertEqual(
+            read_json(self.session / "agents/requirements/codex-session.json")[
+                "session_id"
+            ],
+            sid,
+        )
+        self.assertFalse((self.session / "codex-session.json").exists())
 
     def test_transport_failure_preserves_successful_agent_reply_for_retry(self):
         import os
@@ -494,7 +520,7 @@ class LightTests(unittest.TestCase):
             )
             self.assertEqual(
                 options["session_id"],
-                "same-session" if (home / "codex-session.json").exists() else None,
+                current + "-session" if options["session_record"].exists() else None,
             )
             self.assertNotIn("SKILL_BODY_NOT_FOR_PROMPT", prompt)
             packet = json.loads(prompt.split("\n", 1)[1])
@@ -507,6 +533,13 @@ class LightTests(unittest.TestCase):
                 and read_json(evidence.parent / "context.json")["state"]["turn"] == 1
             ):
                 self.assertEqual(packet["message"], "已接收但尚未执行的评论")
+            if packet["handoff"]:
+                self.assertNotEqual(packet["handoff"]["from"], current)
+                self.assertIn("reply", packet["handoff"])
+                self.assertTrue(packet["handoff"]["files"])
+                self.assertEqual(packet["handoff"]["to"], current)
+                if options["session_id"] is None:
+                    self.assertEqual(packet["message"], "")
             output = next(outputs)
             before = len(replies)
             stream = options["on_event"]
@@ -561,9 +594,10 @@ class LightTests(unittest.TestCase):
             for name in output["artifacts"]:
                 (workspace / name).write_text("unchanged " + name)
             write_json(evidence / "result.json", output)
-            write_json(home / "codex-session.json", {"session_id": "same-session"})
+            write_json(options["session_record"], {"session_id": current + "-session"})
+            self.assertEqual(options["session_record"].parent.name, current)
             # Replies become visible only after this turn's final publication.
-            return output, "same-session"
+            return output, current + "-session"
 
         event_file = self.session / "event.json"
         env = {
@@ -645,13 +679,21 @@ class LightTests(unittest.TestCase):
                     self.assertEqual(route, "")
                 saved = read_json(session / "state.json")
                 self.assertEqual(saved["documents"]["requirements"], original_document)
-                self.assertEqual(saved["session_id"], "same-session")
+                self.assertEqual(
+                    saved["session_id"],
+                    (
+                        "development"
+                        if saved["stage"] == "development"
+                        else "design"
+                        if saved["stage"] == "design"
+                        else "requirements"
+                    )
+                    + "-session",
+                )
                 self.assertEqual(saved["run_id"], "resumed-run")
                 self.assertEqual(saved["turn"], 7)
-                self.assertEqual(
-                    saved["approvals"]["requirements"]["message"], "ok 继续吧"
-                )
-                self.assertIn("design", saved["approvals"])
+                self.assertEqual(saved["history"][0]["message"], "ok 继续吧")
+                self.assertEqual(saved["history"][-1]["from"], "design")
                 self.assertEqual(agent.call_count, 7)
                 self.assertEqual(len(replies), 14)
                 self.assertEqual(
@@ -690,7 +732,17 @@ class LightTests(unittest.TestCase):
                     saved = read_json(session / "state.json")
                     expected_calls = index if index < 4 else 2 * index - 3
                     self.assertEqual(saved["turn"], expected_calls)
-                    self.assertEqual(saved["session_id"], "same-session")
+                    self.assertEqual(
+                        saved["session_id"],
+                        (
+                            "development"
+                            if saved["stage"] == "development"
+                            else "design"
+                            if saved["stage"] == "design"
+                            else "requirements"
+                        )
+                        + "-session",
+                    )
                     self.assertFalse(set(saved) & {"status", "pending", "delivered"})
                     if index == 1:
                         original_document = saved["documents"]["requirements"]
@@ -707,11 +759,9 @@ class LightTests(unittest.TestCase):
                     )
                     self.assertEqual(agent.call_count, expected_calls)
                     self.assertEqual(len(replies), 2 * expected_calls)
-                self.assertEqual(
-                    saved["approvals"]["requirements"]["message"], "ok 继续吧"
-                )
+                self.assertEqual(saved["history"][0]["message"], "ok 继续吧")
                 self.assertIn("design", saved["documents"])
-                self.assertIn("design", saved["approvals"])
+                self.assertEqual(saved["history"][-1]["from"], "design")
                 self.assertIn("环境暂不可用", replies[-1])
                 route = light.main("restore")
                 while route in light.STAGES:

@@ -25,14 +25,8 @@ def evaluate(context_path, payload):
     # The shared gate is called only as development, so document review / Codex
     # reviewer paths can never execute here.
     path = Path(c["evidence"]) / "development-context.json"
-    c["approved_files"] = {
-        n: h
-        for a in c["state"].get("approvals", {}).values()
-        for n, h in a["files"].items()
-    }
-    document = c["state"].get("documents", {}).get(c["state"]["stage"])
-    if document:
-        c["approved_files"].update(document["files"])
+    # Light stage Agents own product/design confirmation. Keep this gate technical.
+    c["approved_files"] = {}
     write_json(path, c)
     # Adapt to the existing check engine privately; no old flags in Agent output.
     check_result = {

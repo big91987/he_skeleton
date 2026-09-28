@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Visible stage jobs sharing one native Session; no classifier or model reviewer."""
+"""Stage Agents with separate native Sessions; no classifier or approval interpreter."""
 
 import argparse
 import copy
@@ -10,7 +10,7 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timezone
+import uuid
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -90,18 +90,6 @@ def validate_result(session, state, result, message, sent):
     current = STATES.index(result["next_state"])
     if current > previous + 1:
         raise ValueError("下一阶段必须由对应 Job 执行，不能跨过阶段")
-    if current > previous and state["stage"] in STAGES[:2]:
-        if state.get("start_stage", state["stage"]) != state["stage"]:
-            raise ValueError("上一阶段的确认不能代替本阶段确认，请先展示本阶段文档")
-        document = state.get("documents", {}).get(state["stage"])
-        if not document or not message.strip():
-            raise ValueError("先展示本阶段文档，再由用户回复确认")
-        if hashes(workspace, document["files"]) != document["files"]:
-            raise ValueError("已展示的文件发生变化，需要重新展示后确认")
-        if sent and datetime.fromisoformat(
-            sent.replace("Z", "+00:00")
-        ) < datetime.fromisoformat(document["shown_at"]):
-            raise ValueError("这条消息早于当前文档，请查看后确认")
     return material
 
 
@@ -127,31 +115,33 @@ def apply_result(session, state, result, message, sent):
             **gate,
             "turn": updated["turn"] if gate_path.exists() else gate["turn"],
         }
-    if current > previous and updated["stage"] in STAGES[:2]:
-        updated.setdefault("approvals", {})[updated["stage"]] = {
-            **updated["documents"][updated["stage"]],
-            "message": message,
-            "event_id": updated.get("active_event"),
-            "turn": updated["turn"],
-        }
-    elif current < previous:
-        for stage in STAGES[current:]:
-            updated.get("approvals", {}).pop(stage, None)
+    # Documents and handoffs are evidence, not a second approval state machine.
+    stage = updated["stage"]
+    documents = updated.setdefault("documents", {})
+    if material:
+        document = documents.setdefault(stage, {"files": {}})
+        document["files"].update(material)
     next_state = result["next_state"]
-    if material and current == previous and next_state in STAGES[:2]:
-        old = updated.get("documents", {}).get(next_state, {})
-        if old.get("files") != material:
-            updated.setdefault("documents", {})[next_state] = {
-                "files": material,
-                "shown_at": datetime.now(timezone.utc).isoformat(),
-            }
     if current != previous:
+        workspace = session / "workspace"
+        files = hashes(
+            workspace,
+            [
+                name
+                for name in documents.get(stage, {}).get("files", {})
+                if relative_file(workspace, name).is_file()
+            ],
+        )
+        documents[stage] = {"files": files}
         updated.setdefault("history", []).append(
             {
-                "from": updated["stage"],
+                "from": stage,
                 "to": next_state,
                 "event_id": updated.get("active_event"),
                 "message": message,
+                "sent": sent,
+                "reply": result["message"],
+                "files": files,
             }
         )
     updated.update(
@@ -164,16 +154,22 @@ def apply_result(session, state, result, message, sent):
 
 def prompt(state, message):
     stage = "development" if state["stage"] == "done" else state["stage"]
+    history = state.get("history", [])
+    handoff = history[-1] if history and history[-1]["to"] == stage else None
+    # The previous Agent consumed this event. Pass it as handoff context, not as
+    # a fresh user instruction to the receiving Agent.
+    arriving = (
+        handoff
+        and str(handoff.get("event_id") or "").rsplit(":", 1)[0]
+        == state.get("active_event", "").rsplit(":", 1)[0]
+    )
     packet = {
         "task": state["task"],
         "stage": stage,
-        "message": message,
-        "handoff_from_previous_job": state.get("start_stage", stage) != stage,
+        "message": "" if arriving else message,
+        "handoff": handoff,
         "documents": {
             s: list(d["files"]) for s, d in state.get("documents", {}).items()
-        },
-        "confirmed_documents": {
-            s: list(d["files"]) for s, d in state.get("approvals", {}).items()
         },
         "project_entries": state["config"]["entries"],
         "stage_instructions": {
@@ -184,23 +180,50 @@ def prompt(state, message):
         "checks": state["config"].get("checks", []),
     }
     return (
-        "本轮采用三字段协议：next_state、message、artifacts。旧会话里的 status、awaiting_approval、delivered、approval_quote 等输出字段不再使用。"
-        "你直接与用户协作；本次执行只负责输入 stage 对应的阶段 Job，不做额外意图分类。每轮重新读取 AGENTS.md 和项目索引，后续及跨阶段恢复同一个原生 Session。本轮仅开放当前阶段的 Skill，按需渐进读取。"
-        "沟通方式：开始工作前先用一两句简短说明当前阶段、对用户消息的理解和接下来做什么；工作中仅在有实质进展、发现或阻塞时主动说明，不逐条复述工具操作。过程回复使用面向用户的 commentary 文本，会直接转发到 Issue；只有最终回复使用三字段 JSON。不要等待做完才首次回应，也不要机械套用固定开场白。"
-        "输入 stage 是本轮开始的位置；输出 next_state 是本轮结束后的接续位置。只有 requirements、design、development、done 四个值。"
-        "澄清、提问、等待确认、遇到阻塞都停留在本阶段，在 message 直接解释或提问，等用户下一条回复再继续；没有额外的等待状态。"
-        "需求和设计完成后，在 artifacts 提交真实文档，并在 message 请用户确认。你结合本条消息和上下文判断是否确认，不依赖固定词或命令。"
-        "用户明确确认已展示的需求或设计后，返回相邻下一阶段且 artifacts=[]，结束当前 Job。框架会自动启动下一 Job 并恢复本 Session，不要在当前 Job 做下一阶段的工作。handoff_from_previous_job 为 true 时，原评论确认的是上一阶段；完成本阶段工作后展示文档并等待新确认，不能重复使用同一批准。只有研发 Job 可以返回 done。"
-        "已有文档、原型或代码直接复用，缺必要决策才澄清。用户要修改前面已确认的内容，返回对应阶段并说明；当前 Job 不代替前面阶段做修改；保存退回位置后需从 Actions 手动接续该阶段，已结束的 Job 不能倒序重开。"
-        "阶段工作与产物遵循 AGENTS.md 和当前 Skill 的输出契约；配置中的交接路径不代替完整交付集合。"
-        "研发在同一个进程尽量持续实现、格式化、lint、测试和整改；Python 修改运行 python3 full_harness/quality.py fix，再 check。"
-        "只有实际完成研发才返回 done，并生成配置指定的验证记录。原生 Stop Hook 会检查，失败让你在同一次执行中修复；环境阻塞返回 development 并说明。"
-        "普通问答保留原阶段，artifacts=[]，不重复提交旧文档。仅新文档、修订文档或用户要求查看文件时列出实际相对路径。"
-        "不得修改执行规则或伪造验证，不能改过已确认文档后沿用旧确认。"
-        "框架的阶段审批由运行时维护；Skill 要求的产品和架构决策记录照常产出。message 是直接给用户看的原话。"
-        "不另调意图分类或独立评审模型，流程记录由框架维护。\n"
+        "你是 stage 对应的阶段 Agent，按 AGENTS.md、项目索引和当前可用 Skill 工作。"
+        "message 是用户本次新消息；handoff 是其他阶段 Agent 的交接记录，包含当时的用户消息和产物路径。"
+        "本阶段恢复自己的 Session，跨阶段由另一 Agent 接手共享工作区和交接材料。"
+        "过程消息使用 commentary；最终按 Schema 返回 next_state、message、artifacts。"
+        "next_state 保持本阶段或交给相邻下一阶段，也可退回前面的阶段；done 仅用于研发完成。"
+        "message 直接回复用户；artifacts 列出本次展示的实际相对文件路径，无需展示则为 []。\n"
         + json.dumps(packet, ensure_ascii=False, indent=2)
     )
+
+
+def stage_session(session, stage):
+    """Keep native thread mappings per stage; adopt a legacy thread only once."""
+    agents = session / "agents"
+    if not agents.exists():
+        legacy = recover_session(session)
+        if legacy:
+            write_json(agents / stage / "codex-session.json", {"session_id": legacy})
+        else:
+            agents.mkdir()
+    record = agents / stage / "codex-session.json"
+    sid = read_json(record)["session_id"] if record.exists() else None
+    # A hard cancellation can leave thread.started before invoke's finally runs.
+    logs = sorted(
+        (session / "turns").glob("*/agent/agent.jsonl"),
+        key=lambda p: int(p.parents[1].name),
+        reverse=True,
+    )
+    for log in logs:
+        context = log.parent.parent / "context.json"
+        if not context.exists() or read_json(context).get("stage_session") != stage:
+            continue
+        for line in log.read_text().splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if event.get("type") == "thread.started":
+                found = event["thread_id"]
+                uuid.UUID(found)
+                if sid and sid != found:
+                    raise ValueError("阶段 Session 记录与执行日志不一致")
+                write_json(record, {"session_id": found})
+                return found, record
+    return sid, record
 
 
 def execute(source, session, state, message, event_id, sent=None):
@@ -211,11 +234,12 @@ def execute(source, session, state, message, event_id, sent=None):
         raise RuntimeError(
             "本条消息已有执行记录；请查看日志，发送新评论接续，避免重复执行"
         )
+    stage = "development" if state["stage"] == "done" else state["stage"]
+    sid, session_record = stage_session(session, stage)
     state["turn"] += 1
     state["active_event"] = event_id
     write_json(session / "state.json", state)
     evidence = session / "turns" / str(state["turn"])
-    stage = "development" if state["stage"] == "done" else state["stage"]
     context = {
         "state": copy.deepcopy(state),
         "message": message,
@@ -228,6 +252,7 @@ def execute(source, session, state, message, event_id, sent=None):
         "controls": state["controls"],
         "task": state["task"],
         "stage": stage,
+        "stage_session": stage,
         "node_path": os.environ.get("NODE_PATH", ""),
         "deadline_monotonic": time.monotonic() + state["config"]["agent_timeout"],
     }
@@ -245,7 +270,8 @@ def execute(source, session, state, message, event_id, sent=None):
             session,
             prompt(state, message),
             evidence / "agent",
-            session_id=recover_session(session),
+            session_id=sid,
+            session_record=session_record,
             hook_context=context_path if stage == "development" else None,
             hook_script="light_hook.py",
             schema_override=SCHEMA,

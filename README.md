@@ -108,7 +108,7 @@ Runner 连通验证：[实际通过的运行](https://github.com/big91987/he_ske
 
 ## Light conversation template
 
-For separate requirements, design and development Jobs sharing one native Session,
+For separate requirements, design and development Agents, each with its own native Session and Job,
 without an extra intent-classifier call, install with
 `python3 scripts/install_light.py <product-checkout> --ref <commit>` (ref defaults to HEAD).
 The independent template is in `templates/light/`; the existing full template remains available.

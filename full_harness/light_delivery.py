@@ -1,7 +1,6 @@
 """Draft PR transport after actual checks; no claim of independent model review."""
 
 from full_harness.common import digest, read_json
-from full_harness.light import hashes
 from full_harness.runner import publish_changes
 
 
@@ -12,9 +11,6 @@ def deliver(session, state):
     )
     if gate.get("status") != "passed" or gate.get("snapshot") != digest(workspace):
         raise ValueError("验证记录与交付文件不匹配")
-    for approval in state.get("approvals", {}).values():
-        if hashes(workspace, approval["files"]) != approval["files"]:
-            raise ValueError("已确认文档发生变化，需要重新确认")
     publish_changes(
         session,
         state,

@@ -2,8 +2,6 @@
 
 Read `docs/00-global/project.md` and the current task before working. Follow the product scope and existing code. Use the native stage Skills as needed, without copying their full text into prompts.
 
-The light workflow resumes one Codex Session per Issue. Requirements, design and development are separate Jobs. Each user turn gets one execution; a stage Job waits for replies and can run multiple turns with only its own native Skill catalog. Answer, clarify, edit or continue within the current stage. Request human confirmation of requirements and design documents; after clear confirmation, return the adjacent next stage and let its Job resume the same Session to work. Do not reuse that confirmation to approve the next stage’s documents. Approval belongs in runtime state, not document prose.
-
 Communicate directly with the user: before working, briefly say which stage you are in and what you will do with their request. Share meaningful progress, findings or blockers as needed. Use commentary for these messages and reserve the three-field JSON for the final result. Tool calls stay in Actions logs; your progress messages accumulate in a collapsed Issue comment, followed by a separate final reply. Choose useful wording and timing instead of repeating a fixed status template.
 
 Never fabricate verification or change managed execution rules. Fix reusable tools upstream. Run project checks and format/lint before declaring delivery. Keep credentials and private sessions out of Git.
@@ -12,6 +10,10 @@ See [the light workflow](docs/harness-light.md). Owner configuration: `.harness/
 
 <!-- harness-stage-deliverables -->
 ## 阶段产物与 Skill 入口
+
+Requirements, design and development are three stage Agents with separate native Sessions and separate Jobs. Within a stage, resume its own Session and use its enabled native Skills. Share the project workspace and handoff documents across stages. The previous Agent's handoff includes the user's message and that Agent's conclusion; it is context, not a new request addressed to you.
+
+Each stage Agent owns its conversation and follows its Skills: decide whether clarification, changes or human confirmation are needed, and interpret the user's reply in context. Requirements and design need human confirmation before handoff; do not approve on the user's behalf. Decide whether a change affects an already confirmed decision rather than asking again merely because evidence or explanatory files were updated. Record product decisions in the existing task documents so the next Agent can continue. The framework records your decision and routes the next Job; it does not interpret approval by keywords, file hashes or comment timestamps.
 
 开始或恢复每一轮时，重新读取本文件和 `docs/README.md`，再读取当前任务的已确认基线。阶段只划分工作责任，不缩减 Skill 的执行步骤、必读参考和交付要求；遵循当前阶段 Skill 及其引用的输出契约，不只读取目录就声明完成。执行协议负责 Session、消息和阶段接续，不重新定义设计方法。
 
@@ -26,6 +28,6 @@ See [the light workflow](docs/harness-light.md). Owner configuration: `.harness/
 - 交互原型与架构设计属于同一个 design 阶段，分别提供可审查的产物。`design/README.md` 只做索引，不能用一个 `design.md` 或摘要代替原型、HLD、契约和 Skill 要求的记录。
 - 明确列出本轮新建、更新、复用的文件及验证证据；需要裁剪约定产物时，说明理由和影响，请用户确认后再裁剪，不能因为任务小、已有页面或“轻量流程”而自行省略。发现 Skill 缺失或约定冲突时指出具体缺口，不自创替代流程。
 - 提交需求或设计确认前，按对应 Skill 自查完整性、需求追溯与跨文档一致性；没有执行评审就不声称“评审通过”。轻量流程由本阶段 Agent 完成自查，不额外启动评审模型。
-- 在 `artifacts` 列出供本次审查的真实文件集合（包括原型运行依赖及证据），回复中说明已完成什么、还缺什么、需要用户确认什么。确认范围绑定完整交付集合，不能只确认索引而遗漏其引用文件。普通问答无需重复提交整包。
+- 在 `artifacts` 列出供本次审查的真实文件集合（包括原型运行依赖及证据），回复中说明已完成什么、还缺什么、需要用户确认什么。让用户能审查方案及其引用材料，由阶段 Agent 结合对话判断确认范围。普通问答无需重复提交整包。
 - 中途接入时先核对已有 PRD、原型、设计、代码与证据，补齐当前阶段缺口后再申请推进。开发前对照批准原型和契约；实现偏差记录后交用户确认。
 <!-- /harness-stage-deliverables -->

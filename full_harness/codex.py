@@ -77,6 +77,7 @@ def invoke(
     read_only=False,
     hook_script="stop_hook.py",
     on_event=None,
+    session_record=None,
 ):
     if (workspace / ".codex").exists():
         raise ValueError(
@@ -165,7 +166,10 @@ def invoke(
                 {"session_id": ids[0], "previous": session_id},
             )
             if not review:
-                write_json(session_dir / "codex-session.json", {"session_id": ids[0]})
+                write_json(
+                    session_record or session_dir / "codex-session.json",
+                    {"session_id": ids[0]},
+                )
     if not ids or (session_id and ids[0] != session_id):
         raise RuntimeError("Codex session continuity could not be verified")
     if code != 0 or not (evidence / "result.json").exists():
