@@ -78,6 +78,8 @@ def invoke(
     hook_script="stop_hook.py",
     on_event=None,
     session_record=None,
+    browser_context=None,
+    environment=None,
 ):
     if (workspace / ".codex").exists():
         raise ValueError(
@@ -96,6 +98,20 @@ def invoke(
         + "\n"
     )
     config += 'model_provider="harness_http"\n[model_providers.harness_http]\nname="OpenAI HTTPS"\nwire_api="responses"\nrequires_openai_auth=true\nsupports_websockets=false\n'
+    env = clean_env(environment)
+    if browser_context is not None:
+        config += (
+            "\n[mcp_servers.harness_browser]\ncommand = "
+            + json.dumps(sys.executable)
+            + "\nargs = "
+            + json.dumps(
+                [str(source / "full_harness/browser.py"), str(browser_context)]
+            )
+            + '\nrequired = true\ntool_timeout_sec = 180\nenabled_tools = ["check"]\n'
+            + "env_vars = "
+            + json.dumps(sorted(env))
+            + '\n[mcp_servers.harness_browser.tools.check]\napproval_mode = "approve"\n'
+        )
     if hook_script not in {"stop_hook.py", "light_hook.py"}:
         raise ValueError("Unknown managed hook")
     if hook_context:
@@ -128,7 +144,6 @@ def invoke(
         # applied to arbitrary user/project hook sources.
         argv += ["--dangerously-bypass-hook-trust"]
     argv += ["-"]
-    env = clean_env()
     env["CODEX_HOME"] = str(home)
     timeout = (
         read_json(hook_context)["config"]["agent_timeout"] if hook_context else 600

@@ -1,5 +1,21 @@
 # Light development workflow
 
+Issue replies identify their source: `[codex]` marks each Agent message and native event block; `[harness]` marks controller status, errors, explanations and navigation links. Labels are added only when rendering. Saved messages, native JSONL, result JSON and document contents are unchanged; a label does not certify that an Agent's claim has been independently verified.
+
+## Browser checks and inline screenshots
+
+For a browser product, the owner enables `browser_roots` in `.harness/full.json`, for example `["app", "docs/04-implementation/tasks/{task}/prototype"]`. The default is `[]`; non-browser projects incur no browser setup. Roots must be dedicated public application directories, never the repository root or private runtime storage.
+
+Before a design/development Agent starts, the controller installs the locked Playwright dependency with `npm ci --ignore-scripts`, installs its matching Chromium and tests localhost serving, browser launch and page rendering. Node/npm and access to the npm/Playwright download services are Runner prerequisites. Installation errors fail explicitly before the Agent begins; rerunning uses the same lock and cached browser installation. The browser driver resolves its pinned dependency locally; it does not modify `NODE_PATH`. Custom environment settings use the shared policy below.
+
+The generated Codex configuration exposes one stdio MCP tool, `harness_browser.check`, implemented by the fixed execution revision. Enabling `browser_roots` authorizes this single fixed `check` tool in generated Codex configuration. The tool runs on the Runner, outside the Agent's shell sandbox; it accepts only configured application roots and a project-relative JSON action plan. It does not accept host scripts, commands, arbitrary evaluation, external URLs or browser profiles. Each invocation uses a fresh browser context, blocks external page requests and retains the existing Agent sandbox. The supported local static-app scope is explicit; this is not a general authenticated remote browser service.
+
+Plans are arrays of `fill`, `click`, `visible`, `absent`, `reload`, `viewport`, `key`, `snapshot_storage`, `unchanged_storage`, `fail_download` and `download` steps. Select a target with `label`, `role`/`name`, or `text`. `download` can assert `expected` JSON, exact `filename` or `suffix`; its bytes are actually downloaded and decoded as UTF-8. `fail_download` injects failure into the page's Blob URL creation and must be described as simulated failure. Unsupported actions fail rather than silently pass.
+
+Screenshots and reports are written into the task's validation directory and recorded by the tool. Final Issue replies publish their PNG files automatically alongside declared PNG artifacts, under a visible `[harness] 📸 截图` section. Immutable Git commit URLs prevent later runs from changing earlier pictures. The standard publisher maintains a `codex/harness-evidence-<issue>` branch automatically; no hand-upload or task-specific publication script is required, and this evidence branch is not merged into product main. Only selected PNGs are uploaded, not private sessions or runtime credentials. Same-repository permissions apply: public repositories support inline images; private repositories receive authenticated file links and are never silently made public. Files are limited to 2 MB each and 20 images per reply.
+
+The browser check proves only its executed assertions. Design screenshots are labeled as prototypes; development screenshots are labeled as validation material, not an automatic pass. Native development checks and the matching workspace snapshot still govern `done`. Existing running jobs retain their checkout; upgrade using the normal pinned installer and reconcile owner config/instructions before validating through a supported workflow entry.
+
 Open an Issue to start one workflow run. Contributors with write, maintain or admin permission can start the Agent; for an outsider-created Issue a contributor starts it manually from Actions. Subsequent natural-language Issue comments are read by the active stage Job, not new workflow triggers. Each user turn starts one `codex exec` or `codex exec resume`; each stage in the Issue keeps its own native Session across turns; different stages use different Sessions. An ordinary reply continues the current Job. Confirming a document runs its current stage and automatically starts the next Job, without a separate intent-classifier call.
 
 The Agent reads project entries and selects native Skills progressively. Only the current stage catalog is enabled for each execution. Requirements and design produce reviewable files and ask for confirmation. A clear confirmation returns the adjacent next stage; the next Job starts or resumes its own stage Agent and reads the handoff materials. The same confirmation cannot approve both requirements and design. Questions remain conversation, without a separate classifier or model reviewer. Existing materials can be reused as the stage baseline.
@@ -45,3 +61,22 @@ Progress never replaces earlier raw events with the latest event and never trunc
 - `apply_result()` follows the Agent's `next_state`, records the handoff and maintains the artifact index. No approval classifier, pending approval token, hash-based reapproval gate or timestamp-based approval gate runs in this profile. Human confirmation remains the stage Agent's responsibility; it is not mechanically guaranteed by the controller.
 - Schema/path validation, execution-rule protection, authorization and event deduplication remain. Development alone uses the native Stop Hook for format/lint and configured checks; `done` and PR publication require the matching successful check snapshot. Technical check success does not prove that a model understood human approval correctly.
 - Install the new runtime from a pinned source commit and reconcile the owner AGENTS.md against this template. Existing workflow runs keep their original checkout; upgrading the source does not hot-patch an active Agent. Use a new test Issue after synchronizing and merging the product update.
+
+## Environment configuration
+
+The repository owner configures `.harness/full.json` with two operations:
+
+```json
+"environment": {
+  "inherit": ["NODE_PATH", "PLAYWRIGHT_BROWSERS_PATH"],
+  "set": {"APP_MODE": "test", "HTTP_PROXY": ""}
+}
+```
+
+`inherit` copies only named variables that exist on the Runner. `set` then sets or overrides literal string values, including inherited values. Empty strings clear a value (the variable still exists); there is no `unset` operation or interpolation. Do not put secrets into committed `set` values. A missing inherited variable remains absent.
+
+The existing minimal process environment (PATH, HOME, locale, proxies and temporary-directory settings) remains the base. Owner settings apply to Codex CLI, the managed browser installation/tool, and configured development/verification commands. Native browser MCP receives the same resolved environment; the framework does not print or persist those resolved values. `CODEX_HOME` and controller credentials (`GH_TOKEN`, `GITHUB_TOKEN`, `ACTIONS_RUNTIME_TOKEN`) remain controller-owned and cannot be configured here. Codex's own shell sandbox and environment policy still apply inside its shell tools.
+
+New templates default to `{"inherit": [], "set": {}}`. Existing configurations without `environment` retain the previous configured-check NODE_PATH fallback for compatibility. Once `environment` is present, explicit configuration is authoritative; no fallback overwrites it. Changing an active task's configuration requires the normal workflow upgrade/restart, not editing its private checkpoint.
+
+Owner-configured check arguments may use `{source}` to reference the fixed execution checkout, for example `node {source}/full_harness/browser/check.cjs app {evidence} .harness/reading-core.json`. This resolves the locked browser dependency beside the trusted driver, rather than depending on a machine-specific `NODE_PATH`. `{workspace}` and `{evidence}` retain their existing meanings.

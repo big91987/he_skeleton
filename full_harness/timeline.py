@@ -181,7 +181,9 @@ class AgentReplies:
 
     def update(self):
         marker = f"<!-- harness-event:progress:{self.state['run_id']}:{self.state['turn']} -->"
-        history = "\n\n---\n\n".join(self.record["messages"].values())
+        history = "\n\n---\n\n".join(
+            "[codex] " + message for message in self.record["messages"].values()
+        )
         raw = json.dumps(self.record["events"], ensure_ascii=False, indent=2)
         for path in self.private_paths:
             raw = raw.replace(str(path), "<private-runtime>")
@@ -199,22 +201,22 @@ class AgentReplies:
                     marker if index == 0 else marker[:-4] + f":part:{index + 1} -->"
                 )
                 suffix = "" if index == 0 else f" · 续 {index + 1}"
-                body = f"{part_marker}\n**{status}** · 阶段：`{self.state['stage']}` · 第 {self.state['turn']} 轮{suffix}\n\n"
+                body = f"{part_marker}\n[harness] **{status}** · 阶段：`{self.state['stage']}` · 第 {self.state['turn']} 轮{suffix}\n\n"
                 if index < len(history_parts):
                     body += (
-                        f"<details><summary>本轮累计进展（{len(self.record['messages'])} 条）{suffix}</summary>\n\n"
+                        f"<details><summary>[codex] 本轮累计进展（{len(self.record['messages'])} 条）{suffix}</summary>\n\n"
                         + history_parts[index]
                         + "\n\n</details>\n\n"
                     )
                 if index < len(raw_parts):
                     body += (
-                        f"<details><summary>本轮累计原始事件（完整 JSON）{suffix}</summary>\n\n<pre>"
+                        f"<details><summary>[codex] 本轮累计原始事件（完整 JSON）{suffix}</summary>\n\n<pre>"
                         + raw_parts[index]
                         + "</pre>\n\n</details>\n\n"
                     )
-                body += f"[运行日志]({url})"
+                body += f"[harness] [运行日志]({url})"
                 if max(len(history_parts), len(raw_parts)) > 1:
-                    body += "\n\n完整内容超过单条评论容量，按本轮编号分段保留；JSON 按顺序拼接即为完整内容。"
+                    body += "\n\n[harness] 完整内容超过单条评论容量，按本轮编号分段保留；JSON 按顺序拼接即为完整内容。"
                 comment_id = ids[index] if index < len(ids) else None
                 if not comment_id:
                     found = find_comment(self.api, self.state, part_marker)

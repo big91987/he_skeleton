@@ -153,11 +153,14 @@ def evaluate(context_path, payload):
         log = evidence / f"check-{gate['attempts']}-{idx}.log"
         # Configuration originates in the fixed execution snapshot, not Agent edits.
         argv = [
-            x.replace("{workspace}", str(root)).replace("{evidence}", str(evidence))
+            x.replace("{workspace}", str(root))
+            .replace("{evidence}", str(evidence))
+            .replace("{source}", c["source"])
             for x in check["argv"]
         ]
-        env = clean_env()
-        if c.get("node_path"):
+        env = clean_env(c["config"].get("environment"))
+        # Compatibility for checkpoints written before configurable environments.
+        if "environment" not in c["config"] and c.get("node_path"):
             env["NODE_PATH"] = c["node_path"]
         try:
             code = run_process(
@@ -195,6 +198,7 @@ def evaluate(context_path, payload):
             review_prompt(Path(c["source"]), root, c, c["stage"]),
             evidence / f"review-{gate['attempts']}",
             review=True,
+            environment=c["config"].get("environment"),
             timeout_override=c["config"]["review_timeout"],
             skills=c["config"]["stages"][c["stage"]].get(
                 "review_skills", ["reviewing-design-and-plans-cn"]

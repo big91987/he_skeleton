@@ -10,6 +10,14 @@ Keep this experiment minimal and tool-neutral.
 - Report implemented, tested and pending capabilities separately.
 - Never claim a fixture, screenshot or mocked backend proves a real end-to-end business flow.
 
+## 工程修复与可复现性
+
+- 修复必须解决代码、配置、依赖安装或执行环境的根因，并成为标准安装、升级和运行路径的一部分；不交付依赖开发者在场补救的临时折中方案。
+- 不用手工补截图、篡改任务状态、临时注入环境、单独修改运行副本或仅修某个 Issue 来宣称问题解决。诊断探针可以定位问题，但其成功不等于正式 Pipeline 已修复。
+- 先修通用源仓库，再通过固定提交和正式同步脚本更新业务仓库；需要的环境条件必须可配置、可检查、可重复建立，不能只在当前机器临时生效。
+- 验证必须走受支持的真实入口，覆盖故障复现、修复后正常执行以及必要的失败恢复；不得依赖手工补证据。用新任务还是恢复旧任务由场景决定，不强制新开 Issue。
+- 交付时说明永久改动、环境前置条件、真实验证范围和剩余限制。若正式路径未跑通，明确说明未完成，不把临时救援结果当作完成证明。
+
 
 ## Python quality
 

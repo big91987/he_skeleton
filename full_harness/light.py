@@ -236,6 +236,14 @@ def execute(source, session, state, message, event_id, sent=None):
         )
     stage = "development" if state["stage"] == "done" else state["stage"]
     sid, session_record = stage_session(session, stage)
+    browser_enabled = stage in {"design", "development"} and state["config"].get(
+        "browser_roots"
+    )
+    if browser_enabled:
+        from full_harness.browser import prepare
+
+        print("[harness] 检查受控浏览器运行环境。", flush=True)
+        prepare(source, state["config"].get("environment"))
     state["turn"] += 1
     state["active_event"] = event_id
     write_json(session / "state.json", state)
@@ -253,7 +261,6 @@ def execute(source, session, state, message, event_id, sent=None):
         "task": state["task"],
         "stage": stage,
         "stage_session": stage,
-        "node_path": os.environ.get("NODE_PATH", ""),
         "deadline_monotonic": time.monotonic() + state["config"]["agent_timeout"],
     }
     context_path = evidence / "context.json"
@@ -272,6 +279,8 @@ def execute(source, session, state, message, event_id, sent=None):
             evidence / "agent",
             session_id=sid,
             session_record=session_record,
+            browser_context=context_path if browser_enabled else None,
+            environment=state["config"].get("environment"),
             hook_context=context_path if stage == "development" else None,
             hook_script="light_hook.py",
             schema_override=SCHEMA,
@@ -295,7 +304,7 @@ def report(session, state, error=None, continuous=False):
     if continuous:
         public = public / "turns" / str(state["turn"])
     public.mkdir(parents=True, exist_ok=True)
-    body = error or state["reply"]
+    body = "[harness] " + error if error else "[codex] " + state["reply"]
     evidence = session / "turns" / str(state["turn"])
     context_path = evidence / "context.json"
     before = (
@@ -303,15 +312,15 @@ def report(session, state, error=None, continuous=False):
         if context_path.exists()
         else state["stage"]
     )
-    body += "\n\n本轮执行：" + ("执行失败" if error else "已结束")
-    body += f"\n\n本轮阶段（开始 → 已保存）：`{before} → {state['stage']}`"
+    body += "\n\n[harness] 本轮执行：" + ("执行失败" if error else "已结束")
+    body += f"\n\n[harness] 本轮阶段（开始 → 已保存）：`{before} → {state['stage']}`"
     if (
         continuous
         and not error
         and state["stage"] == before
         and state["stage"] != "done"
     ):
-        body += "\n\n当前 Workflow 仍在运行，正在等你的下一条回复；直接在本 Issue 评论即可，无需重新启动。"
+        body += "\n\n[harness] 当前 Workflow 仍在运行，正在等你的下一条回复；直接在本 Issue 评论即可，无需重新启动。"
     # Read the actual current-turn output, including a proposal rejected by checks.
     # Never reconstruct it from the checkpoint or fall back to an earlier turn.
     rendered = None
@@ -326,7 +335,7 @@ def report(session, state, error=None, continuous=False):
         (public / "agent-result.json").write_text(rendered + "\n")
     except (OSError, ValueError):
         (public / "agent-result.json").unlink(missing_ok=True)
-        body += "\n\n本轮未取得可解析的 Agent 结构化输出。"
+        body += "\n\n[harness] 本轮未取得可解析的 Agent 结构化输出。"
     events = []
     log = evidence / "agent/agent.jsonl"
     if log.exists():
@@ -351,13 +360,21 @@ def report(session, state, error=None, continuous=False):
             if events
             else "最终结果 JSON（本轮无原始事件日志）"
         )
-        body += "\n\n<details><summary>" + label + "</summary>\n\n"
+        body += "\n\n<details><summary>[codex] " + label + "</summary>\n\n"
         if len(html.escape(rendered)) < 24000:
             body += "<pre>" + html.escape(rendered) + "</pre>"
         else:
-            body += "完整 JSON 较长，请从本轮产物下载 agent-events.json 和 agent-result.json（如有）。"
-        body += "\n\nitem.completed 只表示一个消息或工具项结束；turn.completed 表示 Codex 本轮输出结束，任务是否完成以保存阶段为准。\n\n</details>"
-    for name in [] if error else state.get("artifacts", []):
+            body += "[harness] 完整 JSON 较长，请从本轮产物下载 agent-events.json 和 agent-result.json（如有）。"
+        body += "\n\n[harness] item.completed 只表示一个消息或工具项结束；turn.completed 表示 Codex 本轮输出结束，任务是否完成以保存阶段为准。\n\n</details>"
+    artifacts = list(state.get("artifacts", [])) if not error else []
+    if not error and (evidence / "browser.json").exists():
+        for run in read_json(evidence / "browser.json"):
+            artifacts.extend(run["artifacts"])
+    artifacts = list(dict.fromkeys(artifacts))
+    from full_harness.screenshots import publish_screenshots
+
+    body += publish_screenshots(api, session, state, artifacts, before)
+    for name in artifacts:
         path = relative_file(session / "workspace", name)
         if not path.is_file():
             continue
@@ -369,7 +386,7 @@ def report(session, state, error=None, continuous=False):
             and path.stat().st_size < 14000
         ):
             body += (
-                "\n\n<details><summary>查看文档："
+                "\n\n<details><summary>[harness] 查看文档："
                 + html.escape(name)
                 + "</summary>\n\n<pre>"
                 + html.escape(path.read_text())
@@ -377,19 +394,24 @@ def report(session, state, error=None, continuous=False):
             )
     url = f"https://github.com/{state['repo']}/actions/runs/{state['run_id']}"
     if state.get("pr_url"):
-        body += "\n\n[交付 PR](" + state["pr_url"] + ")"
-    body += "\n\n[运行日志及产物下载](" + url + ")"
+        body += "\n\n[harness] [交付 PR](" + state["pr_url"] + ")"
+    body += "\n\n[harness] [运行日志及产物下载](" + url + ")"
     if continuous:
         body += "（文档可在本条评论展开；下载包在本阶段 Job 结束后提供。）"
     body = body.replace(str(session), "<private-runtime>").replace(
         str(Path.home()), "<private-runtime>"
     )
     if len(body) > 60000:
-        body = body[:12000] + "\n\n产物较长，请查看[运行日志及下载](" + url + ")。"
+        body = (
+            body[:12000]
+            + "\n\n[harness] 产物较长，请查看[运行日志及下载]("
+            + url
+            + ")。"
+        )
     (public / "reply.md").write_text(body)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
-            f.write("当前阶段：" + state["stage"] + "\n\n" + body)
+            f.write("[harness] 当前阶段：" + state["stage"] + "\n\n" + body)
     publish(api, state, body)
     write_json(session / "state.json", state)
 

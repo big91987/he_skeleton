@@ -598,13 +598,13 @@ def verify_stage(source, session, state, attempt=0):
         outcomes = []
         for i, check in enumerate(checks):
             log = evidence / f"check-{i}.log"
-            env = clean_env()
-            if os.environ.get("NODE_PATH"):
+            env = clean_env(state["config"].get("environment"))
+            if "environment" not in state["config"] and os.environ.get("NODE_PATH"):
                 env["NODE_PATH"] = os.environ["NODE_PATH"]
             argv = [
-                x.replace("{workspace}", str(workspace)).replace(
-                    "{evidence}", str(evidence)
-                )
+                x.replace("{workspace}", str(workspace))
+                .replace("{evidence}", str(evidence))
+                .replace("{source}", str(source))
                 for x in check["argv"]
             ]
             code = run_process(
@@ -706,6 +706,7 @@ def run_agent(source, session, state, stage):
             sid,
             evidence / "context.json" if stage == "development" else None,
             skills=state["config"]["stages"][stage]["skills"],
+            environment=state["config"].get("environment"),
         )
     finally:
         # Preserve the compact input checkpoint even if a started native turn is interrupted.
@@ -824,6 +825,7 @@ def review_stage(source, session, state):
             review_prompt(source, workspace, context, "review"),
             evidence,
             review=True,
+            environment=state["config"].get("environment"),
             timeout_override=state["config"]["review_timeout"],
             skills=state["config"]["stages"]
             .get("review", {})

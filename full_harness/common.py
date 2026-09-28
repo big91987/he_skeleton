@@ -95,8 +95,33 @@ def controls(root):
     }
 
 
-def clean_env():
-    return {
+def environment_policy(value):
+    """Owner config only: explicit inheritance, followed by literal overrides."""
+    if not isinstance(value, dict) or set(value) - {"inherit", "set"}:
+        raise ValueError("environment supports only inherit and set")
+    inherited = value.get("inherit", [])
+    overrides = value.get("set", {})
+    if not isinstance(inherited, list) or not all(
+        isinstance(n, str) for n in inherited
+    ):
+        raise ValueError("environment.inherit must be a list of variable names")
+    if not isinstance(overrides, dict) or not all(
+        isinstance(v, str) for v in overrides.values()
+    ):
+        raise ValueError("environment.set must map variable names to strings")
+    for name in [*inherited, *overrides]:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            raise ValueError("Invalid environment variable name")
+        if name in {"CODEX_HOME", "GH_TOKEN", "GITHUB_TOKEN", "ACTIONS_RUNTIME_TOKEN"}:
+            raise ValueError("Controller-owned environment variable: " + name)
+    if any("\0" in v for v in overrides.values()):
+        raise ValueError("Environment values cannot contain NUL")
+    return value
+
+
+def clean_env(policy=None):
+    policy = environment_policy(policy or {})
+    env = {
         k: v
         for k, v in os.environ.items()
         if k
@@ -117,6 +142,12 @@ def clean_env():
             "no_proxy",
         }
     }
+
+    for name in policy.get("inherit", []):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    env.update(policy.get("set", {}))
+    return env
 
 
 def stream_log(log, done, on_event=None):
@@ -192,10 +223,24 @@ def configuration(source):
         "agent_timeout",
         "check_timeout",
         "review_timeout",
+        "browser_roots",
+        "environment",
     }:
         raise ValueError("Unknown full workflow configuration")
     if value.get("version") not in {1, 2}:
         raise ValueError("Unsupported configuration version")
+    environment_policy(value.get("environment", {}))
+    roots = value.get("browser_roots", [])
+    if not isinstance(roots, list) or not all(isinstance(n, str) and n for n in roots):
+        raise ValueError("browser_roots must be a list of project directories")
+    for name in roots:
+        path = relative_file(source, name.replace("{task}", "1"))
+        if path.resolve() == Path(source).resolve() or any(
+            part.startswith(".") for part in Path(name).parts
+        ):
+            raise ValueError(
+                "Browser roots must be dedicated public application directories"
+            )
     for name in value["entries"]:
         if not relative_file(source, name).is_file():
             raise ValueError("Project entry missing: " + name)
