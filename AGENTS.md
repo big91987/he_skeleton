@@ -10,6 +10,11 @@ Keep this experiment minimal and tool-neutral.
 - Report implemented, tested and pending capabilities separately.
 - Never claim a fixture, screenshot or mocked backend proves a real end-to-end business flow.
 
+## 测试仓合并授权
+
+- 用户已授权本项目专用测试仓 `big91987/reading_list` 的 PR 在完成相应检查后由 Agent 自行合并并继续验证，无需逐次请求用户审批。
+- 此授权仅适用于该测试仓，不扩展到源仓 `big91987/he_skeleton` 或其他业务仓库；不以此绕过分支保护或必要检查。
+
 ## 工程修复与可复现性
 
 - 修复必须解决代码、配置、依赖安装或执行环境的根因，并成为标准安装、升级和运行路径的一部分；不交付依赖开发者在场补救的临时折中方案。
