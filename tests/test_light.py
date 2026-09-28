@@ -300,6 +300,10 @@ class LightTests(unittest.TestCase):
 
         def process(argv, workspace, env, log, timeout, prompt, stream, on_event):
             self.assertEqual(env.get("NODE_PATH"), "/runner/browser/node_modules")
+            self.assertNotIn("HARNESS_MANAGED_WORKSPACE", env)
+            self.assertIn("Harness CI/CD 托管工作区", prompt)
+            self.assertTrue(prompt.endswith("需求"))
+            self.assertEqual((log.parent / "prompt.txt").read_text(), prompt)
             self.assertEqual(env["APP_MODE"], "test")
             self.assertEqual(env["HTTP_PROXY"], "")
             self.assertNotIn("GH_TOKEN", env)
@@ -555,6 +559,14 @@ class LightTests(unittest.TestCase):
             raise AssertionError(path)
 
         def codex(source, workspace, home, prompt, evidence, **options):
+            import subprocess
+
+            self.assertEqual(
+                subprocess.check_output(
+                    ["git", "branch", "--show-current"], cwd=workspace, text=True
+                ).strip(),
+                "codex/light-task-1",
+            )
             current = read_json(evidence.parent / "context.json")["state"]["stage"]
             self.assertEqual(options["skills"], [current])
             self.assertEqual(
