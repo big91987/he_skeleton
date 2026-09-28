@@ -1,0 +1,6 @@
+interface:
+  display_name: "平台总体架构 V2"
+  short_description: "以可恢复的决策流程完成平台 HLD 与演进架构设计"
+  default_prompt: "使用 $platform-architecture-v2-cn 从现有需求和决策恢复上下文，继续完成可进入 LLD 的平台 HLD。"
+policy:
+  allow_implicit_invocation: false

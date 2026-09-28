@@ -5,3 +5,4 @@
 __pycache__/
 .harness-local/
 node_modules/
+.ruff_cache/
