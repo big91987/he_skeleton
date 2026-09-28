@@ -95,3 +95,5 @@ python3 tests/integration_full.py --run-live
 
 
 真实浏览器探针：`python3 tests/integration_browser.py --run-live` 通过正式安装入口、原生 Codex MCP 工具和研发 Stop Hook，验证 Chromium 启动、桌面/手机截图、实际 Unicode JSON 下载、显式注入的下载失败反馈，以及校验子进程环境覆盖。该探针使用合成应用和模型额度，不调用 GitHub 评论服务，不代替产品验收。本次已真实通过。
+
+阶段交接展示：扩展现有三阶段连续入口场景，核对成功向前交接不再发布旧阶段最终评论，但每轮原始结果和完整回复仍可下载。保留同阶段问答、失败、最终交付及非持续调用的回复行为。模型是否省略纯确认 commentary 由原生模型与实际 Issue 验证，固定输出夹具不证明其自然语言行为。

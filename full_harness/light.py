@@ -185,7 +185,10 @@ def prompt(state, message):
         "本阶段恢复自己的 Session，跨阶段由另一 Agent 接手共享工作区和交接材料。"
         "过程消息使用 commentary；最终按 Schema 返回 next_state、message、artifacts。"
         "next_state 保持本阶段或交给相邻下一阶段，也可退回前面的阶段；done 仅用于研发完成。"
-        "message 直接回复用户；artifacts 列出本次展示的实际相对文件路径，无需展示则为 []。\n"
+        "留在本阶段时 message 直接回复用户；前进交接时 message 是给下一阶段的内部交接摘要，不重复向用户汇报已确认。"
+        "单纯接受确认并交接时不发 commentary；如果有疑问、变更或阻塞，正常向用户说明。"
+        "接收交接的 Agent 开始实际工作时向用户介绍本阶段工作，不重复请求上一阶段的确认。"
+        "done 时仍向用户说明交付结果；artifacts 列出真实产物路径，无需附加材料则为 []。\n"
         + json.dumps(packet, ensure_ascii=False, indent=2)
     )
 
@@ -312,6 +315,14 @@ def report(session, state, error=None, continuous=False):
         if context_path.exists()
         else state["stage"]
     )
+    # A successful forward handoff belongs in the trace, not another Issue reply.
+    # Same-stage questions, failures, backward routing and final delivery stay visible.
+    handoff = (
+        continuous
+        and not error
+        and before in STAGES[:-1]
+        and state["stage"] == STAGES[STAGES.index(before) + 1]
+    )
     body += "\n\n[harness] 本轮执行：" + ("执行失败" if error else "已结束")
     body += f"\n\n[harness] 本轮阶段（开始 → 已保存）：`{before} → {state['stage']}`"
     if (
@@ -373,7 +384,8 @@ def report(session, state, error=None, continuous=False):
     artifacts = list(dict.fromkeys(artifacts))
     from full_harness.screenshots import publish_screenshots
 
-    body += publish_screenshots(api, session, state, artifacts, before)
+    if not handoff:
+        body += publish_screenshots(api, session, state, artifacts, before)
     for name in artifacts:
         path = relative_file(session / "workspace", name)
         if not path.is_file():
@@ -412,7 +424,8 @@ def report(session, state, error=None, continuous=False):
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
             f.write("[harness] 当前阶段：" + state["stage"] + "\n\n" + body)
-    publish(api, state, body)
+    if not handoff:
+        publish(api, state, body)
     write_json(session / "state.json", state)
 
 

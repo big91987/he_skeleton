@@ -80,3 +80,7 @@ The existing minimal process environment (PATH, HOME, locale, proxies and tempor
 New templates default to `{"inherit": [], "set": {}}`. Existing configurations without `environment` retain the previous configured-check NODE_PATH fallback for compatibility. Once `environment` is present, explicit configuration is authoritative; no fallback overwrites it. Changing an active task's configuration requires the normal workflow upgrade/restart, not editing its private checkpoint.
 
 Owner-configured check arguments may use `{source}` to reference the fixed execution checkout, for example `node {source}/full_harness/browser/check.cjs app {evidence} .harness/reading-core.json`. This resolves the locked browser dependency beside the trusted driver, rather than depending on a machine-specific `NODE_PATH`. `{workspace}` and `{evidence}` retain their existing meanings.
+
+## Confirmation and handoff replies
+
+Within the continuous workflow, a successful requirements → design or design → development transition saves the native result, documents and full reply in the stage download and Actions summary, but posts no outgoing-stage final comment. The incoming Agent speaks when it begins actual work. Agents should not narrate pure confirmation bookkeeping. Same-stage clarification/revision, failures, backward routing, and final delivery remain visible. No keyword approval parser or extra model call is introduced.

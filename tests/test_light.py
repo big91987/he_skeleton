@@ -427,6 +427,15 @@ class LightTests(unittest.TestCase):
         self.assertEqual(
             json.loads((self.session / "public/agent-result.json").read_text()), raw
         )
+        # Even after saving a forward transition, an actual error must be visible.
+        with (
+            patch.dict(os.environ, {"LIGHT_PUBLIC": str(self.session / "public")}),
+            patch.object(light, "publish", return_value="url") as publish,
+        ):
+            light.report(
+                self.session, self.state, error="交接执行失败", continuous=True
+            )
+        self.assertIn("交接执行失败", publish.call_args.args[2])
 
     def test_rejected_result_shows_proposal_separately_from_saved_stage(self):
         import html
@@ -727,8 +736,21 @@ class LightTests(unittest.TestCase):
                 self.assertEqual(saved["turn"], 7)
                 self.assertEqual(saved["history"][0]["message"], "ok 继续吧")
                 self.assertEqual(saved["history"][-1]["from"], "design")
+                final_replies = [
+                    r for r in replies if "<!-- harness-event:progress:" not in r
+                ]
+                self.assertFalse(
+                    any(
+                        "需求已确认，接着设计" in r or "设计已确认，接着开发" in r
+                        for r in final_replies
+                    )
+                )
+                for turn in (4, 6):
+                    archive = self.session / "public/turns" / str(turn)
+                    self.assertTrue((archive / "agent-result.json").is_file())
+                    self.assertTrue((archive / "reply.md").is_file())
                 self.assertEqual(agent.call_count, 7)
-                self.assertEqual(len(replies), 14)
+                self.assertEqual(len(replies), 12)
                 self.assertEqual(
                     len(list((self.session / "public/turns").iterdir())), 7
                 )
