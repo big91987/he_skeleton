@@ -2,7 +2,7 @@
 
 Read `docs/00-global/project.md` and the current task before working. Follow the product scope and existing code. Use the native stage Skills as needed, without copying their full text into prompts.
 
-Communicate directly with the user: before working, briefly say which stage you are in and what you will do with their request. Share meaningful progress, findings or blockers as needed. Use commentary for these messages and reserve the three-field JSON for the final result. Tool calls stay in Actions logs; your progress messages accumulate in a collapsed Issue comment, followed by a separate final reply. Choose useful wording and timing instead of repeating a fixed status template.
+Communicate directly with the user. When starting substantive work, briefly say which stage you are in and what you will do. A turn that only accepts confirmation and hands off is silent: save the accepted decisions and documents, do not send acknowledgement/startup commentary, and return the next stage with an internal handoff summary. The incoming stage Agent introduces its own work; it does not ask the user to confirm the previous stage again. If the reply contains changes, questions or a blocker, discuss those normally. Share meaningful progress as needed using commentary; reserve the three-field JSON for the final result. Progress accumulates in a folded Issue comment. Same-stage results and final delivery receive a separate reply; successful forward handoffs are retained in logs/downloads without another Issue comment. Do not narrate routine bookkeeping.
 
 Never fabricate verification or change managed execution rules. Fix reusable tools upstream. Run project checks and format/lint before declaring delivery. Keep credentials and private sessions out of Git.
 

@@ -348,7 +348,7 @@ class FullWorkflowTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             plan(self.work, {"full_harness/a.py": b"bad"}, {}, "revision")
 
-    def test_delivery_retry_reuses_commit_after_pr_permission_failure(self):
+    def test_delivery_on_advanced_main_preserves_task_branch_and_retries(self):
         state = {
             "repo": "owner/repo",
             "branch": "main",
@@ -359,10 +359,12 @@ class FullWorkflowTests(unittest.TestCase):
             "baseline_modes": {},
             "completed": {"review": {"snapshot": digest(self.work)}},
         }
-        remote = {"ref": None, "commits": 0, "allow_pr": False}
+        remote = {"ref": None, "commits": 0, "allow_pr": False, "main": "other"}
 
         def api(repo, path, method="GET", data=None):
             if path == "commits/main":
+                return {"sha": remote["main"], "commit": {"tree": {"sha": "maintree"}}}
+            if path == "commits/base":
                 return {"sha": "base", "commit": {"tree": {"sha": "oldtree"}}}
             if path == "git/blobs":
                 return {"sha": "blob"}
@@ -378,16 +380,31 @@ class FullWorkflowTests(unittest.TestCase):
                     ]
                 )
             if path == "git/trees":
+                self.assertEqual(data["base_tree"], "oldtree")
+                self.assertEqual(
+                    {item["path"] for item in data["tree"]},
+                    {"AGENTS.md", "validation.md"},
+                )
                 return {"sha": "tree"}
             if path == "git/commits":
+                self.assertEqual(data["parents"], [remote["ref"] or "base"])
                 remote["commits"] += 1
-                return {"sha": "newcommit"}
+                return {"sha": f"commit-{remote['commits']}"}
+            if path == "git/refs/heads/codex/full-task-1":
+                self.assertEqual(method, "PATCH")
+                self.assertFalse(data["force"])
+                remote["ref"] = data["sha"]
+                return {}
             if path == "git/refs":
+                self.assertEqual(data["ref"], "refs/heads/codex/full-task-1")
                 remote["ref"] = data["sha"]
                 return {}
             if path.startswith("pulls?"):
                 return []
             if path == "pulls":
+                self.assertTrue(data["draft"])
+                self.assertEqual(data["head"], "codex/full-task-1")
+                self.assertEqual(data["base"], "main")
                 if not remote["allow_pr"]:
                     raise RuntimeError("PR permission denied")
                 return {"html_url": "https://github.com/owner/repo/pull/2"}
@@ -396,10 +413,25 @@ class FullWorkflowTests(unittest.TestCase):
         with patch.object(runner, "api", side_effect=api):
             with self.assertRaises(RuntimeError):
                 runner.deliver(self.root, state)
-            self.assertEqual(state["delivery_commit"], "newcommit")
+            self.assertEqual(state["delivery_commit"], "commit-1")
+            state = json.loads((self.root / "state.json").read_text())
             remote["allow_pr"] = True
+            remote["main"] = "other-again"
             runner.deliver(self.root, state)
-        self.assertEqual(remote["commits"], 1)
+            self.assertEqual(remote["commits"], 1)
+            (self.work / "validation.md").write_text("Updated task evidence")
+            state["completed"]["review"]["snapshot"] = digest(self.work)
+            runner.deliver(self.root, state)
+            self.assertEqual(remote["ref"], "commit-2")
+            self.assertEqual(remote["main"], "other-again")
+            remote["ref"] = "external-task-edit"
+            (self.work / "validation.md").write_text("Further task evidence")
+            state["completed"]["review"]["snapshot"] = digest(self.work)
+            with self.assertRaisesRegex(
+                ValueError, "Delivery branch changed externally"
+            ):
+                runner.deliver(self.root, state)
+        self.assertEqual(remote["commits"], 2)
         self.assertEqual(state["status"], "waiting_review")
 
     def test_human_pr_feedback_invalidates_acceptance_and_resumes_implementation(self):

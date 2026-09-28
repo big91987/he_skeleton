@@ -118,7 +118,7 @@ jobs:
   design:
     needs: [restore, requirements]
     if: >-
-      always() && needs.restore.result == 'success' &&
+      !cancelled() && needs.restore.result == 'success' &&
       needs.requirements.result != 'failure' && needs.requirements.result != 'cancelled' &&
       (needs.restore.outputs.stage == 'design' || needs.requirements.outputs.next_stage == 'design')
     # Keep all stage jobs on the same persistent Runner.
@@ -155,7 +155,7 @@ jobs:
   development:
     needs: [restore, requirements, design]
     if: >-
-      always() && needs.restore.result == 'success' &&
+      !cancelled() && needs.restore.result == 'success' &&
       needs.requirements.result != 'failure' && needs.requirements.result != 'cancelled' &&
       needs.design.result != 'failure' && needs.design.result != 'cancelled' &&
       (needs.restore.outputs.stage == 'development' || needs.design.outputs.next_stage == 'development')
