@@ -125,7 +125,7 @@ async function main() {
             break;
           case "key":
             if (
-              !["Tab", "Enter", "Space", "ArrowDown", "ArrowUp"].includes(
+              !["Tab", "Enter", "Escape", "Space", "ArrowDown", "ArrowUp"].includes(
                 step.key,
               )
             )

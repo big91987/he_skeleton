@@ -588,7 +588,16 @@ def main(job="restore", wait_seconds=None, poll_seconds=15):
         state = (
             read_json(state_path)
             if state_path.exists()
-            else new_state(source, session, task, repo, sha, branch, runner)
+            else new_state(
+                source,
+                session,
+                task,
+                repo,
+                sha,
+                branch,
+                runner,
+                task_branch="codex/light-task-" + str(number),
+            )
         )
         migrate(state)
         if state["runner"] != runner or state["baseline"] != sha:

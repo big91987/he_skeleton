@@ -63,6 +63,17 @@ def plan(destination, managed, templates, revision, profile="full"):
                         changes[name] = (
                             original.rstrip() + "\n\n" + contract + "\n"
                         ).encode()
+    # Add the scoped runtime contract on install/upgrade, preserving Owner text.
+    start = "<!-- harness-workflow-git -->"
+    end = "<!-- /harness-workflow-git -->"
+    template = templates.get("AGENTS.md", b"").decode()
+    agent_path = target("AGENTS.md")
+    original = changes.get(
+        "AGENTS.md", agent_path.read_bytes() if agent_path.exists() else b""
+    ).decode()
+    if start not in original and start in template and end in template:
+        contract = template[template.index(start) : template.index(end) + len(end)]
+        changes["AGENTS.md"] = (original.rstrip() + "\n\n" + contract + "\n").encode()
     changes[".harness/full-upstream.json"] = (
         json.dumps(
             {

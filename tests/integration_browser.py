@@ -28,10 +28,13 @@ work = root / "workspace"
 <button id="add">Add</button><button id="export">Export</button><ul id="books"></ul><p id="status"></p>
 <script>
 const books=[];
+document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelector('#status').textContent='Editing cancelled';});
 document.querySelector('#add').onclick=()=>{books.push(document.querySelector('#book').value);document.querySelector('#books').textContent=books.join(', ');};
 document.querySelector('#export').onclick=()=>{try{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(books)],{type:'application/json'}));a.download='books.json';a.click();URL.revokeObjectURL(a.href);}catch(e){document.querySelector('#status').textContent='Export failed';}};
 </script></body></html>""")
 plan = [
+    {"action": "key", "key": "Escape"},
+    {"action": "visible", "text": "Editing cancelled"},
     {"action": "fill", "label": "Book", "value": "中文书籍"},
     {"action": "click", "role": "button", "name": "Add"},
     {
