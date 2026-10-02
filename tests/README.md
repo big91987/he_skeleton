@@ -103,3 +103,4 @@ python3 tests/integration_full.py --run-live
 Workflow 分支职责：扩展现有三阶段接续场景，在每次 Agent 调用前用真实 Git 检查任务分支，覆盖首次运行、阶段切换和恢复。扩展包装器测试，确认运行上下文直接传给 Codex 并原样留存，不使用环境变量识别 Workflow；扩展安装升级场景，验证条件规则补入 AGENTS.md、保留 Owner 原文且重复同步不重复追加。普通本地会话不受条件规则限制。
 
 Escape 回归：现有原生浏览器探针增加 Escape 按键与可见取消反馈，保护工具不再拒绝取消键。本次通过真实原型验证取消后重新编辑并保存；未重复运行整套原生模型探针。
+存储异常路径：扩展已有真实浏览器探针，先通过页面保存数据，再用 `storage_write_failure` 的 `enabled: true` 让当前页面的 `localStorage.setItem` 抛出 `QuotaExceededError`，验证失败提示及持久化内容不变；`enabled: false` 恢复后，再次通过页面保存并回读新数量。该动作不修改存储内容，刷新页面也会清除故障。`python3 tests/integration_browser.py --browser-only` 可单独运行同一真实 Chromium 场景，不调用模型；这是合成应用的工具集成验证，不是产品端到端验收。
