@@ -147,6 +147,27 @@ async function main() {
               storage,
             );
             break;
+          case "storage_write_failure":
+            if (typeof step.enabled !== "boolean")
+              throw new Error("storage_write_failure requires boolean enabled");
+            await page.evaluate((enabled) => {
+              // A page-scoped fault: reload discards it, disabling restores writes.
+              if (!window.__harnessStorageFault) {
+                const original = Storage.prototype.setItem;
+                const fault = { enabled: false };
+                Storage.prototype.setItem = function (...args) {
+                  if (fault.enabled && this === window.localStorage)
+                    throw new DOMException(
+                      "Injected localStorage write failure",
+                      "QuotaExceededError",
+                    );
+                  return Reflect.apply(original, this, args);
+                };
+                window.__harnessStorageFault = fault;
+              }
+              window.__harnessStorageFault.enabled = enabled;
+            }, step.enabled);
+            break;
           case "fail_download":
             await page.evaluate(() => {
               URL.createObjectURL = () => {
