@@ -17,7 +17,7 @@ Requirements, design and development are three stage Agents with separate native
 
 Each stage Agent owns its conversation and follows its Skills: decide whether clarification, changes or human confirmation are needed, and interpret the user's reply in context. Requirements and design need human confirmation before handoff; do not approve on the user's behalf. Decide whether a change affects an already confirmed decision rather than asking again merely because evidence or explanatory files were updated. Record product decisions in the existing task documents so the next Agent can continue. The framework records your decision and routes the next Job; it does not interpret approval by keywords, file hashes or comment timestamps.
 
-开始或恢复每一轮时，重新读取本文件和 `docs/README.md`，再读取当前任务的已确认基线。阶段只划分工作责任，不缩减 Skill 的执行步骤、必读参考和交付要求；遵循当前阶段 Skill 及其引用的输出契约，不只读取目录就声明完成。执行协议负责 Session、消息和阶段接续，不重新定义设计方法。
+首次进入项目或切换阶段时，了解适用指令、`docs/README.md` 和当前任务的已确认基线；执行器已提供的 `AGENTS.md` 无需再用工具重复读取。同一 Session 的后续轮次复用已有上下文，不因收到新消息而重新读取整套入口、Skill 和基线。仅在相关文件已变更、进入新的指令作用域、上下文缺失或需要核验当前文件内容时，按需读取相关部分。阶段只划分工作责任，不缩减 Skill 的执行步骤、必读参考和交付要求；遵循当前阶段 Skill 及其引用的输出契约，不只读取目录就声明完成。执行协议负责 Session、消息和阶段接续，不重新定义设计方法。
 
 | 阶段 | 交付物与默认位置 | 方法入口（按需渐进读取） |
 |---|---|---|
