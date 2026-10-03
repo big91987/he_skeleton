@@ -8,13 +8,13 @@ from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SOURCE))
-from full_harness.browser import prepare
+from full_harness.browser import check, prepare
 from full_harness.codex import invoke
 from full_harness.common import controls, digest, read_json, write_json
 
-if "--run-live" not in sys.argv:
+if "--run-live" not in sys.argv and "--browser-only" not in sys.argv:
     raise SystemExit(
-        "Use --run-live to install Chromium and use authenticated Codex quota"
+        "Use --browser-only for Chromium, or --run-live for authenticated Codex + MCP + Stop Hook"
     )
 
 root = Path(tempfile.mkdtemp(prefix="harness-browser-live-"))
@@ -25,13 +25,17 @@ work = root / "workspace"
     work / "app/index.html"
 ).write_text("""<!doctype html><html lang="en"><meta charset="utf-8"><title>Browser probe</title>
 <body><h1>Reading export probe</h1><label>Book <input id="book"></label>
-<button id="add">Add</button><button id="export">Export</button><ul id="books"></ul><p id="status"></p>
+<button id="add">Add</button><button id="save">Save</button><button id="export">Export</button><ul id="books"></ul><p id="status"></p>
 <script>
 const books=[];
+document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelector('#status').textContent='Editing cancelled';});
+document.querySelector('#save').onclick=()=>{try{localStorage.setItem('books',JSON.stringify(books));document.querySelector('#status').textContent='Saved '+JSON.parse(localStorage.getItem('books')).length;}catch(e){document.querySelector('#status').textContent='Save failed';}};
 document.querySelector('#add').onclick=()=>{books.push(document.querySelector('#book').value);document.querySelector('#books').textContent=books.join(', ');};
 document.querySelector('#export').onclick=()=>{try{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(books)],{type:'application/json'}));a.download='books.json';a.click();URL.revokeObjectURL(a.href);}catch(e){document.querySelector('#status').textContent='Export failed';}};
 </script></body></html>""")
 plan = [
+    {"action": "key", "key": "Escape"},
+    {"action": "visible", "text": "Editing cancelled"},
     {"action": "fill", "label": "Book", "value": "中文书籍"},
     {"action": "click", "role": "button", "name": "Add"},
     {
@@ -41,6 +45,17 @@ plan = [
         "filename": "books.json",
         "expected": ["中文书籍"],
     },
+    {"action": "click", "role": "button", "name": "Save"},
+    {"action": "snapshot_storage"},
+    {"action": "storage_write_failure", "enabled": True},
+    {"action": "fill", "label": "Book", "value": "Second"},
+    {"action": "click", "role": "button", "name": "Add"},
+    {"action": "click", "role": "button", "name": "Save"},
+    {"action": "visible", "text": "Save failed"},
+    {"action": "unchanged_storage"},
+    {"action": "storage_write_failure", "enabled": False},
+    {"action": "click", "role": "button", "name": "Save"},
+    {"action": "visible", "text": "Saved 2"},
     {"action": "fail_download"},
     {"action": "click", "role": "button", "name": "Export"},
     {"action": "visible", "text": "Export failed"},
@@ -95,6 +110,11 @@ context = {
     "deadline_monotonic": time.monotonic() + 360,
 }
 write_json(root / "context.json", context)
+if "--browser-only" in sys.argv:
+    outcome = check(root / "context.json", {"root": "app", "plan": "plan.json"})
+    assert outcome["passed"], outcome
+    print(json.dumps({"root": str(root), "browser": outcome}, indent=2))
+    raise SystemExit(0)
 result, sid = invoke(
     SOURCE,
     work,

@@ -99,3 +99,5 @@ python3 tests/integration_full.py --run-live
 阶段交接展示：扩展现有三阶段连续入口场景，核对成功向前交接不再发布旧阶段最终评论，但每轮原始结果和完整回复仍可下载。保留同阶段问答、失败、最终交付及非持续调用的回复行为。模型是否省略纯确认 commentary 由原生模型与实际 Issue 验证，固定输出夹具不证明其自然语言行为。
 
 任务分支交付回归：扩展原 PR 权限失败重试场景，模拟主线连续前进，验证提交树始终基于任务原始版本、后续提交接在任务分支上、重试复用已保存提交，且不覆盖他人对任务分支的修改。GitHub API 使用夹具；不宣称验证了合并结果。
+
+Browser interaction coverage: `node --test tests/browser-interactions.cjs` checks hover without clicking, pointer leave, touch taps, layout comparison, and storage write observations with a negative write case. `python3 tests/integration_browser.py --browser-only` exercises download and storage failure recovery through the formal browser entry. These fixtures validate tooling, not product acceptance.

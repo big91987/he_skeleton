@@ -57,8 +57,25 @@ async function main() {
   let browser;
   try {
     browser = await chromium.launch({ headless: true, chromiumSandbox: true });
+    const deviceStep = plan[0]?.action === "device" ? plan[0] : null;
+    if (
+      deviceStep &&
+      (typeof deviceStep.touch !== "boolean" ||
+        !Number.isInteger(deviceStep.width) ||
+        deviceStep.width < 320 ||
+        deviceStep.width > 1920)
+    )
+      throw new Error("device requires touch boolean and width 320..1920");
+    const device = {
+      hasTouch: deviceStep?.touch ?? false,
+      isMobile: deviceStep?.touch ?? false,
+      viewport: {
+        width: deviceStep?.width ?? 1440,
+        height: deviceStep ? 844 : 1000,
+      },
+    };
     const context = await browser.newContext({
-      viewport: { width: 1440, height: 1000 },
+      ...device,
       serviceWorkers: "block",
       acceptDownloads: true,
     });
@@ -72,6 +89,21 @@ async function main() {
         : route.abort(),
     );
     await context.routeWebSocket("**/*", (socket) => socket.close());
+    let storageWrites = 0;
+    await context.exposeBinding("__harnessStorageWrite", () => {
+      storageWrites++;
+    });
+    await context.addInitScript(() => {
+      window.__harnessPendingWrites = [];
+      for (const name of ["setItem", "removeItem", "clear"]) {
+        const original = Storage.prototype[name];
+        Storage.prototype[name] = function (...args) {
+          if (this === window.localStorage)
+            window.__harnessPendingWrites.push(window.__harnessStorageWrite());
+          return Reflect.apply(original, this, args);
+        };
+      }
+    });
     const page = await context.newPage();
     page.setDefaultTimeout(5000);
     const errors = [],
@@ -88,17 +120,104 @@ async function main() {
       return;
     }
     let failure = null,
-      storage;
+      storage,
+      writeSnapshot;
+    const geometry = new Map();
     try {
       for (const step of plan) {
-        const locator = step.label
-          ? page.getByLabel(step.label, { exact: true })
-          : step.role
-            ? page.getByRole(step.role, { name: step.name, exact: true })
-            : step.text
-              ? page.getByText(step.text, { exact: true })
-              : null;
+        const locator = step.selector
+          ? page.locator(step.selector)
+          : step.label
+            ? page.getByLabel(step.label, { exact: true })
+            : step.role
+              ? page.getByRole(step.role, { name: step.name, exact: true })
+              : step.text
+                ? page.getByText(step.text, { exact: true })
+                : null;
         switch (step.action) {
+          case "device":
+            if (step !== plan[0])
+              throw new Error("device must be the first step");
+            break;
+          case "hover":
+            await locator.hover();
+            if (step.duration_ms !== undefined) {
+              if (
+                !Number.isInteger(step.duration_ms) ||
+                step.duration_ms < 0 ||
+                step.duration_ms > 2000
+              )
+                throw new Error("Invalid hover duration_ms");
+              await page.waitForTimeout(step.duration_ms);
+            }
+            break;
+          case "pointer": {
+            const size = page.viewportSize();
+            if (
+              ![step.x, step.y].every(Number.isFinite) ||
+              step.x < 0 ||
+              step.y < 0 ||
+              step.x >= size.width ||
+              step.y >= size.height
+            )
+              throw new Error("Pointer outside viewport");
+            await page.mouse.move(step.x, step.y);
+            break;
+          }
+          case "tap":
+            await locator.tap();
+            break;
+          case "snapshot_geometry":
+          case "unchanged_geometry": {
+            const key = JSON.stringify([
+              step.selector,
+              step.label,
+              step.role,
+              step.name,
+              step.text,
+            ]);
+            const boxes = await locator.evaluateAll((elements) =>
+              elements.map((el) => {
+                const r = el.getBoundingClientRect();
+                return { x: r.x, y: r.y, width: r.width, height: r.height };
+              }),
+            );
+            if (!boxes.length) throw new Error("No geometry targets matched");
+            if (step.action === "snapshot_geometry") geometry.set(key, boxes);
+            else {
+              const before = geometry.get(key);
+              if (!before)
+                throw new Error(
+                  "snapshot_geometry must run first for this locator",
+                );
+              assert.equal(
+                boxes.length,
+                before.length,
+                "Geometry target count changed",
+              );
+              boxes.forEach((box, i) =>
+                Object.keys(box).forEach((k) =>
+                  assert.ok(
+                    Math.abs(box[k] - before[i][k]) <= 0.5,
+                    "Geometry changed: " + k,
+                  ),
+                ),
+              );
+            }
+            break;
+          }
+          case "unchanged_storage_writes":
+            if (writeSnapshot === undefined)
+              throw new Error("snapshot_storage must run first");
+            await page.evaluate(() =>
+              Promise.all(window.__harnessPendingWrites),
+            );
+            assert.equal(
+              storageWrites,
+              writeSnapshot,
+              "localStorage write attempts changed",
+            );
+            break;
           case "fill":
             await locator.fill(step.value);
             break;
@@ -125,14 +244,23 @@ async function main() {
             break;
           case "key":
             if (
-              !["Tab", "Enter", "Space", "ArrowDown", "ArrowUp"].includes(
-                step.key,
-              )
+              ![
+                "Tab",
+                "Enter",
+                "Escape",
+                "Space",
+                "ArrowDown",
+                "ArrowUp",
+              ].includes(step.key)
             )
               throw new Error("Unsupported key");
             await page.keyboard.press(step.key === "Space" ? " " : step.key);
             break;
           case "snapshot_storage":
+            await page.evaluate(() =>
+              Promise.all(window.__harnessPendingWrites),
+            );
+            writeSnapshot = storageWrites;
             storage = await page.evaluate(() =>
               JSON.stringify(Object.entries(localStorage).sort()),
             );
@@ -146,6 +274,27 @@ async function main() {
               ),
               storage,
             );
+            break;
+          case "storage_write_failure":
+            if (typeof step.enabled !== "boolean")
+              throw new Error("storage_write_failure requires boolean enabled");
+            await page.evaluate((enabled) => {
+              // A page-scoped fault: reload discards it, disabling restores writes.
+              if (!window.__harnessStorageFault) {
+                const original = Storage.prototype.setItem;
+                const fault = { enabled: false };
+                Storage.prototype.setItem = function (...args) {
+                  if (fault.enabled && this === window.localStorage)
+                    throw new DOMException(
+                      "Injected localStorage write failure",
+                      "QuotaExceededError",
+                    );
+                  return Reflect.apply(original, this, args);
+                };
+                window.__harnessStorageFault = fault;
+              }
+              window.__harnessStorageFault.enabled = enabled;
+            }, step.enabled);
             break;
           case "fail_download":
             await page.evaluate(() => {
@@ -204,7 +353,15 @@ async function main() {
     fs.writeFileSync(
       path.join(output, "browser.json"),
       JSON.stringify(
-        { passed: !failure, performed, errors, failure, downloads },
+        {
+          passed: !failure,
+          performed,
+          errors,
+          failure,
+          downloads,
+          device,
+          storageWrites,
+        },
         null,
         2,
       ),

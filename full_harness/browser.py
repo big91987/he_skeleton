@@ -107,7 +107,7 @@ def serve(context):
     ]
     tool = {
         "name": "check",
-        "description": "Run real browser checks on an owner-configured local app/prototype and save desktop/mobile screenshots and results. Use this tool instead of launching a browser in the shell sandbox. plan is a project-relative JSON array: fill/click/visible/absent/reload, viewport(width), key(key), snapshot_storage/unchanged_storage, fail_download, download(role/name or label, expected JSON, optional filename/suffix). No arbitrary JavaScript or shell. Include returned artifacts in your reply; passing proves only these checks.",
+        "description": "Run real browser checks on an owner-configured local app/prototype and save desktop/mobile screenshots and results. Use this tool instead of launching a browser in the shell sandbox. plan is a project-relative JSON array: fill/click/visible/absent/reload, viewport(width), key(key), snapshot_storage/unchanged_storage, storage_write_failure(enabled: boolean; localStorage.setItem fault until disabled or page reload), fail_download, download(role/name or label, expected JSON, optional filename/suffix). Additional actions: hover(locator,duration_ms optional 0..2000), pointer(x,y), tap(locator), first-step device(touch:boolean,width:320..1920), snapshot_geometry/unchanged_geometry(same locator), unchanged_storage_writes after snapshot_storage. Locators also accept selector. Touch uses a dedicated context; resized screenshots alone do not prove touch. No arbitrary JavaScript or shell. Include returned artifacts in your reply; passing proves only these checks.",
         "annotations": {
             "readOnlyHint": False,
             "destructiveHint": False,
